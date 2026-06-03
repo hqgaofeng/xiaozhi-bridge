@@ -15,6 +15,15 @@
   route for per-device history. 11 new unit tests in
   tests/test_db.py + tests/test_api.py. Bridge tests 42 → 53
   (1 live-test skipif unchanged).
+- V2 #4 post-release polish (still 0.2.1, no version bump):
+  `BridgeDB.record_conversation` now applies the same
+  `device_id or "unknown"` rule as `upsert_device` so the
+  conversation rows under the unknown bucket are queryable via
+  `/api/devices/unknown/conversations`; `_get_header` in
+  `bridge/server.py` now handles the websockets 16+ API where
+  `ws.handshake` is a method (not a property); new
+  `scripts/e2e_smoke.py` is a 5-case live e2e harness.
+  Bridge tests 53 → 57.
 
 ### Next
 - V2 #5 admin console wired to /api/* (replace mock fetches in
@@ -62,6 +71,55 @@
   `mcp.enabled` / `mcp.auto_initialize` (V1 cleanup had already
   moved mcp config into code; the yaml keys were dead). The
   yaml-stable `mcp: {}` placeholder from V1 cleanup is kept.
+
+### Fixed (post-release follow-ups landed in the v0.2.1 line)
+
+- **`_get_header` failed on websockets 16+** (commit `2cd05db`):
+  V2 #3 wrote the helper against the websockets 14-15 API where
+  `ws.handshake` is a *property* returning the parsed `Request`.
+  In 16+ `ws.handshake` is a *method* that performs the upgrade,
+  and the parsed request lives at `ws.request`. The old code did
+  `getattr(ws, "handshake").headers` on the bound method, which
+  raised `AttributeError` and was silently swallowed by the
+  fall-through path, so `device_id` was always `None` for any
+  modern websockets client. The V2 #3 e2e missed this because
+  the e2e client didn't send a `Device-Id` header (so the NULL
+  was "expected"). V2 #4 made the bug visible by actually
+  reading the device id. Helper now probes all three surfaces
+  (legacy / 14-15 / 16+) with a `callable()` check to
+  distinguish property from method. 4 new tests in
+  `tests/test_pipeline.py`.
+
+- **`record_conversation` didn't apply the unknown bucket**
+  (commit `9bb3e80`): the V2 #4 gap surfaced by the live e2e
+  — `upsert_device(None)` wrote a row under id `"unknown"` but
+  `record_conversation(device_id=None)` still wrote the
+  conversation row with `device_id=NULL`. The two tables
+  drifted: `/api/devices` had an `unknown` row, but
+  `/api/devices/unknown/conversations` returned `[]` because
+  no conversation row carried the bucket id. Fix: same
+  `effective_device_id = device_id or "unknown"` rule as
+  upsert_device. The `unknown` filter in `/api/conversations`
+  and the new `/api/devices/unknown/conversations` route both
+  return the right rows now. 1 test updated in `tests/test_db.py`.
+
+### Added (post-release follow-up)
+
+- **`scripts/e2e_smoke.py`**: a 5-case e2e harness against the
+  live bridge (hello → listen → STT → LLM → TTS → tts.stop,
+  then assert the conversation row landed in sqlite). Catches
+  things pytest can't: library version drift, live openclaw
+  behavior, real db commit timing. Not a CI test (it needs
+  the live bridge + openclaw); run it after a rebuild to
+  confirm production is healthy. Run with
+  `python scripts/e2e_smoke.py` from the project root. The
+  script discovered 4 bugs during the V2 #4 live deploy
+  (recv-timeout too short, race against db commit, wrong
+  default DB_PATH for the docker named volume, and the
+  unknown-bucket gap above) — most of which pytest would
+  never have caught. See README project structure for
+  details; see `docs/deployment-docker.md` §4 for the
+  verification step that calls this.
 
 ## [0.2.0] - 2026-06-03
 

@@ -208,6 +208,38 @@ curl http://127.0.0.1:18789/health
 - 本地：http://localhost:5180
 - 生产：https://jarvis.beallen.top
 
+### 4.1 Smoke test（运行端到端检验脚本）
+
+上面那些 `curl` 只检查进程是否在听端口。**不**检查“设备到
+ESR/EL/ML 脑子 + DB 写”这整条链路。运行 `scripts/e2e_smoke.py`
+可以验证：
+
+  - WebSocket 握手成功（已修复 websockets 16+ API 变更问题）
+  - STT + LLM + TTS 整轮跑完并收到 `tts.stop`
+  - `/api/devices` 真出现行（esp32-001 / esp32-002 / unknown）
+  - `/api/devices/{id}/conversations` 真返回 N 条
+  - Bridge 测试表中有“设备 × 对话”关联
+
+```bash
+# 从项目根目录跑，默认指向 https://jarvis.beallen.top
+python scripts/e2e_smoke.py
+
+# 跑单个 case（prefix 匹配）
+python scripts/e2e_smoke.py --case esp32-001 -v
+
+# 指向本地 bridge
+XIAOZHI_BRIDGE_WS_URL=ws://127.0.0.1:8000/xiaozhi/v1/ \
+  python scripts/e2e_smoke.py
+```
+
+脚本会连续 5 轮以不同 Device-Id 发 hello→listen→stop，并检查
+sqlite 中的 conversation 表。期望输出： `5/5 cases landed a
+conversation row in sqlite`。
+
+> 不依赖 pytest，**也不走 CI**（CI 没跑着 openclaw + bridge
+> 实例）。它是“人类巡检”工具——升级后、重启后、改动 db 后、调试
+> websockets 版本类问题后，手动跑一轮。
+
 ## 5. 升级
 
 ```bash

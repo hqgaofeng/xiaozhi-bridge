@@ -164,7 +164,9 @@ xiaozhi-bridge/
 │   │   ├── asr/ tts/ llm/ mcp/ protocol/  # V1 模块
 │   │   ├── server.py           # bridge WS 进程，集成写 db
 │   │   └── config.py
-│   └── tests/                  # 53 个测试（27 V1 + 15 V2 #3 + 11 V2 #4）
+│   └── tests/                  # 57 个测试（27 V1 + 15 V2 #3 + 15 V2 #4，含 _get_header）
+├── scripts/                    # 运维工具
+│   └── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
 ├── web/                        # React 智控台（V1 mock，V2 #5 接 /api/*）
 │   ├── package.json
 │   ├── src/
