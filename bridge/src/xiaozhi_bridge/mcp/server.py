@@ -132,7 +132,8 @@ class MCPServer:
         }
 
     async def _handle_tools_list(self, params: dict) -> dict:
-        cursor = params.get("cursor", "")
+        # V1: no pagination, all tools returned at once
+        # V2: respect cursor and return nextCursor
         with_user_tools = params.get("withUserTools", False)
         all_tools = tool_registry.list_tools(with_user_tools=with_user_tools)
         # V1: no pagination, all tools returned at once
@@ -150,9 +151,9 @@ class MCPServer:
         try:
             result = await tool_registry.call_tool(name, arguments)
         except KeyError as e:
-            raise MCPError(JSONRPCErrorCode.METHOD_NOT_FOUND, str(e))
+            raise MCPError(JSONRPCErrorCode.METHOD_NOT_FOUND, str(e)) from None
         except TypeError as e:
-            raise MCPError(JSONRPCErrorCode.INVALID_PARAMS, str(e))
+            raise MCPError(JSONRPCErrorCode.INVALID_PARAMS, str(e)) from None
 
         # Wrap result per MCP convention: content array
         return {

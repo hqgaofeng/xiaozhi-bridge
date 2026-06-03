@@ -54,9 +54,6 @@ class MockASR(ASRBase):
         # The audio parameter is intentionally unused — we mock the result.
         del audio, sample_rate, channels  # silence linters
 
-        if self.mode == "fixed":
-            text = self.text
-        else:
-            text = random.choice(self.phrases)
+        text = self.text if self.mode == "fixed" else random.choice(self.phrases)
 
         return ASRResult(text=text, confidence=1.0, language="zh")

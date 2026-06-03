@@ -13,8 +13,6 @@ operator may want to override the default agent's system prompt.
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any
-
 
 # --- Voice-assistant persona (reference, NOT sent by default) ---
 

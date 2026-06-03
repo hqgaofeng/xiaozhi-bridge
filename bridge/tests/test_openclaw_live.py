@@ -12,7 +12,7 @@ The test:
      reachability and auth.
   3. Spins up the bridge server, connects a fake device, runs one turn,
      and verifies the assistant's text actually comes back from M3
-     (not the bridge's "嗯，我还没想好怎么回答" fallback).
+     (not the bridge's "嗯,我还没想好怎么回答" fallback).
 
 Why not just the unit test_pipeline.py? It mocks LLM, so it cannot
 distinguish a working LLM integration from a broken one. This test is
@@ -153,10 +153,14 @@ async def test_bridge_to_openclaw_live(app_config_live):
             binary_frames = 0
             tts_stopped = False
             from xiaozhi_bridge.protocol.messages import (
-                LLMMessage, MCPMessage, ServerHello, STTMessage,
-                SystemMessage, TTSMessage,
+                LLMMessage,
+                MCPMessage,
+                ServerHello,
+                STTMessage,
+                SystemMessage,
+                TTSMessage,
             )
-            _MAP = {
+            msg_map = {
                 "hello": ServerHello, "stt": STTMessage, "llm": LLMMessage,
                 "tts": TTSMessage, "mcp": MCPMessage, "system": SystemMessage,
             }
@@ -166,7 +170,7 @@ async def test_bridge_to_openclaw_live(app_config_live):
                     binary_frames += 1
                 else:
                     d = json.loads(raw)
-                    cls = _MAP.get(d.get("type"))
+                    cls = msg_map.get(d.get("type"))
                     assert cls, f"unknown server msg: {d}"
                     msg = cls.model_validate(d)
                     types.append(msg.type)

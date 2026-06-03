@@ -20,4 +20,4 @@ admin console can be wired up incrementally.
 from .db import BridgeDB, get_db
 from .main import app, create_app
 
-__all__ = ["BridgeDB", "get_db", "app", "create_app"]
+__all__ = ["BridgeDB", "app", "create_app", "get_db"]

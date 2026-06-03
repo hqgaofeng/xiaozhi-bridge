@@ -31,12 +31,11 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .db import BridgeDB, get_db
-
 
 # --- App factory ---
 
@@ -117,20 +116,23 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/conversations")
     async def list_conversations(
-        deviceId: str | None = None,
+        # web/ side uses `deviceId` (camelCase) — alias keeps the
+        # HTTP contract stable while letting the python param be
+        # snake_case (pep8 / ruff happy).
+        device_id: str | None = Query(default=None, alias="deviceId"),
         limit: int = 50,
         db: BridgeDB = db_dep,
     ) -> list[dict]:
         if limit < 1 or limit > 500:
             raise HTTPException(status_code=400, detail="limit must be 1..500")
-        return await db.list_conversations(device_id=deviceId, limit=limit)
+        return await db.list_conversations(device_id=device_id, limit=limit)
 
     @app.get("/api/conversations/{conversation_id}")
     async def get_conversation(conversation_id: str, db: BridgeDB = db_dep) -> dict:
         try:
             cid = int(conversation_id)
         except ValueError:
-            raise HTTPException(status_code=400, detail="id must be an integer")
+            raise HTTPException(status_code=400, detail="id must be an integer") from None
         c = await db.get_conversation(cid)
         if c is None:
             raise HTTPException(status_code=404, detail="conversation not found")

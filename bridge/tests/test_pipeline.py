@@ -128,7 +128,7 @@ async def test_full_turn_pipeline(monkeypatch, app_config):
                 SystemMessage,
                 TTSMessage,
             )
-            _SERVER_TYPES = {
+            server_types = {
                 "hello": ServerHello,
                 "stt": STTMessage,
                 "llm": LLMMessage,
@@ -142,7 +142,7 @@ async def test_full_turn_pipeline(monkeypatch, app_config):
                     binary_frames.append(raw)
                 else:
                     data = json.loads(raw)
-                    cls = _SERVER_TYPES.get(data.get("type"))
+                    cls = server_types.get(data.get("type"))
                     assert cls is not None, f"unknown server msg: {data}"
                     msg = cls.model_validate(data)
                     messages.append(msg)

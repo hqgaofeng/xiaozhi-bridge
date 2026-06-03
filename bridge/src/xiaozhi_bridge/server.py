@@ -11,6 +11,7 @@ Each connection runs an independent asyncio task with its own SessionContext.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -149,10 +150,8 @@ class XiaozhiBridgeServer:
             await self._server.wait_closed()
         await self.llm.close()
         if self._db is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._db.close()
-            except Exception:
-                pass
         self.log.info("server.stopped")
 
     async def serve_forever(self) -> None:

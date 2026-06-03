@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -139,12 +139,12 @@ class SystemMessage(BaseModel):
 # --- Discriminated union of all client messages ---
 
 
-ClientMessage = Union[HelloMessage, ListenMessage, AbortMessage, MCPMessage]
+ClientMessage = HelloMessage | ListenMessage | AbortMessage | MCPMessage
 
 # All server messages (for serialization)
-ServerMessage = Union[
-    ServerHello, STTMessage, LLMMessage, TTSMessage, MCPMessage, SystemMessage
-]
+ServerMessage = (
+    ServerHello | STTMessage | LLMMessage | TTSMessage | MCPMessage | SystemMessage
+)
 
 
 # --- Parse / serialize helpers ---

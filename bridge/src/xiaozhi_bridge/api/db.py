@@ -24,13 +24,12 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 import aiosqlite
-
 
 # --- Schema ---
 
@@ -137,12 +136,12 @@ class BridgeDB:
             self._conn = None
 
     async def _seed_demo_iot_if_empty(self) -> None:
-        assert self._conn is not None
+        if self._conn is None:
+            return
         async with self._conn.execute("SELECT COUNT(*) FROM iot_devices") as cur:
             (n,) = await cur.fetchone()
         if n:
             return
-        now = time.time()
         await self._conn.executemany(
             "INSERT INTO iot_devices(id, name, type, room, online, state_json) "
             "VALUES(?, ?, ?, ?, 1, ?)",
@@ -185,7 +184,7 @@ class BridgeDB:
         async with self._conn.execute(sql) as cur:
             rows = await cur.fetchall()
         out = []
-        for device_id, first_seen, last_seen, sid, last_state, created_at in rows:
+        for device_id, _first_seen, last_seen, sid, last_state, _created_at in rows:
             state = "offline" if sid is None else last_state
             out.append(
                 {

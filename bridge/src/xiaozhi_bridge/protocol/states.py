@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from .messages import (
@@ -20,7 +20,7 @@ from .messages import (
 )
 
 
-class SessionState(str, Enum):
+class SessionState(StrEnum):
     """Top-level device session states.
 
     State diagram:
@@ -110,11 +110,10 @@ class SessionContext:
         """
         if db is None:
             return
-        try:
-            await db.update_session_state(self.session_id, self.state.value)
-        except Exception:
+        import contextlib
+        with contextlib.suppress(Exception):
             # Persistence failure must not break the turn
-            pass
+            await db.update_session_state(self.session_id, self.state.value)
 
     def append_audio(self, pcm: bytes) -> None:
         """Append PCM audio to the current turn's buffer."""

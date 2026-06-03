@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import signal
 import sys
 from pathlib import Path
@@ -50,11 +51,9 @@ async def run_server(config: AppConfig) -> None:
         stop_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _signal_handler)
-        except NotImplementedError:
+        with contextlib.suppress(NotImplementedError):
             # Windows doesn't support add_signal_handler
-            pass
+            loop.add_signal_handler(sig, _signal_handler)
 
     await server.start()
     try:

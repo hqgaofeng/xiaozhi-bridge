@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 import struct
+from collections.abc import AsyncIterator
 
 from .base import TTSBase, TTSChunk, register_tts
 

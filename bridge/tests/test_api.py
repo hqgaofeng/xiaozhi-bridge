@@ -11,7 +11,6 @@ patching the module — `reset_db_for_tests` closes + nulls it.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
