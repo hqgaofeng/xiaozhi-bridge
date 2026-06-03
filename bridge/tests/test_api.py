@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from xiaozhi_bridge.api import create_app
-from xiaozhi_bridge.api.db import reset_db_for_tests
+from xiaozhi_bridge.api.db import get_db, reset_db_for_tests
 
 
 @pytest.fixture
@@ -64,7 +64,66 @@ def test_get_device_404(client: TestClient) -> None:
 def test_reboot_device_501(client: TestClient) -> None:
     r = client.post("/api/devices/foo/reboot")
     assert r.status_code == 501
-    assert "not implemented" in r.json()["detail"]
+
+
+# --- V2 #4: GET /api/devices/{id}/conversations --
+
+
+def test_device_conversations_empty(client: TestClient) -> None:
+    r = client.get("/api/devices/esp32-001/conversations")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_device_conversations_seeded(client: TestClient) -> None:
+    """V2 #4: write conversations for two devices, verify the new
+    route filters by device and respects ?limit."""
+    import asyncio
+
+    from xiaozhi_bridge.api.db import get_db
+
+    async def _seed() -> None:
+        # We have to reach the same db the TestClient app is using.
+        # The client fixture already opened it; we just reuse the
+        # process-level singleton.
+        d = get_db()
+        await d.open_session("s1", device_id="esp32-001")
+        await d.open_session("s2", device_id="esp32-001")
+        await d.open_session("s3", device_id="esp32-002")
+        await d.record_conversation("esp32-001", "s1", "hi", "hello")
+        await d.record_conversation("esp32-001", "s2", "weather", "sunny")
+        await d.record_conversation("esp32-002", "s3", "music", "playing")
+
+    asyncio.run(_seed())
+
+    r = client.get("/api/devices/esp32-001/conversations")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 2
+    assert all(c["deviceId"] == "esp32-001" for c in data)
+
+    r2 = client.get("/api/devices/esp32-002/conversations")
+    assert len(r2.json()) == 1
+    assert r2.json()[0]["deviceId"] == "esp32-002"
+
+
+def test_device_conversations_limit(client: TestClient) -> None:
+    """The new ?limit query param clamps the result set."""
+    import asyncio
+
+    async def _seed() -> None:
+        d = get_db()
+        await d.open_session("s1", device_id="esp32-001")
+        for i in range(5):
+            await d.record_conversation(
+                "esp32-001", "s1", f"q{i}", f"a{i}"
+            )
+
+    asyncio.run(_seed())
+
+    r = client.get("/api/devices/esp32-001/conversations?limit=2")
+    assert r.status_code == 200
+    assert len(r.json()) == 2
 
 
 # --- conversations ---

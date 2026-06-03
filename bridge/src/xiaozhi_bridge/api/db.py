@@ -154,7 +154,14 @@ class BridgeDB:
 
     # --- devices ---
 
-    async def upsert_device(self, device_id: str, auth_token: str | None = None) -> None:
+    async def upsert_device(
+        self, device_id: str | None, auth_token: str | None = None
+    ) -> None:
+        # V2 #4: a missing Device-Id header (firmware forgot to set it)
+        # is stored under the synthetic "unknown" id so the row still
+        # exists in /api/devices. This way "device lost in the void"
+        # failures are visible instead of silent.
+        effective_id = device_id or "unknown"
         assert self._conn is not None
         now = time.time()
         await self._conn.execute(
@@ -163,7 +170,7 @@ class BridgeDB:
             "ON CONFLICT(device_id) DO UPDATE SET "
             "  last_seen = excluded.last_seen, "
             "  auth_token = COALESCE(excluded.auth_token, devices.auth_token)",
-            (device_id, now, now, auth_token),
+            (effective_id, now, now, auth_token),
         )
         await self._conn.commit()
 
@@ -209,8 +216,10 @@ class BridgeDB:
     async def open_session(self, session_id: str, device_id: str | None) -> None:
         assert self._conn is not None
         now = time.time()
-        if device_id:
-            await self.upsert_device(device_id)
+        # V2 #4: always upsert, even when device_id is None — the
+        # "unknown" bucket in upsert_device catches sessions opened
+        # without a Device-Id header so they show up in /api/devices.
+        await self.upsert_device(device_id)
         await self._conn.execute(
             "INSERT OR REPLACE INTO sessions(session_id, device_id, created_at, last_state) "
             "VALUES(?, ?, ?, 'idle')",

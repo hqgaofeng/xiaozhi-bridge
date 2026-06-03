@@ -112,6 +112,21 @@ def _register_routes(app: FastAPI) -> None:
             detail="device reboot not implemented in V1; V2 will add WebSocket-triggered reboot",
         )
 
+    @app.get("/api/devices/{device_id}/conversations")
+    async def list_device_conversations(
+        device_id: str,
+        limit: int = Query(50, ge=1, le=500),
+        db: BridgeDB = db_dep,
+    ) -> list[dict]:
+        """List conversations for one device, newest first.
+
+        V2 #4 addition so the Devices page can show a per-device
+        history without forcing the client to fetch all conversations
+        and filter. The "unknown" device is the synthetic bucket for
+        firmware that didn't send a Device-Id header.
+        """
+        return await db.list_conversations(device_id=device_id, limit=limit)
+
     # --- conversations ---
 
     @app.get("/api/conversations")
