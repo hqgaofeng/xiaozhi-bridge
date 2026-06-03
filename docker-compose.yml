@@ -57,6 +57,11 @@ services:
       - XIAOZHI_OPENCLAW__BASE_URL=http://host.docker.internal:18789
       - XIAOZHI_LOGGING__LEVEL=${LOG_LEVEL:-INFO}
       - XIAOZHI_LOGGING__FORMAT=json
+      # Timezone: align container logs with host (Asia/Shanghai = UTC+8).
+      # Affects structlog's ISO timestamps, which will now read in local
+      # time instead of UTC. The V2 /api/logs/stream consumer should
+      # also use this for consistency.
+      - TZ=Asia/Shanghai
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -81,6 +86,9 @@ services:
     ports:
       # Loopback only; host nginx (jarvis.beallen.top) proxies here.
       - "127.0.0.1:5180:80"
+    environment:
+      # Caddy access log in the web container will use this TZ.
+      - TZ=Asia/Shanghai
     mem_limit: 50m
 
 # No named volumes — bridge is stateless (config is bind-mounted,

@@ -29,6 +29,13 @@ RUN pnpm build
 # ============================================================
 FROM caddy:2-alpine AS runtime
 
+# Install tzdata and set timezone (default: Asia/Shanghai = UTC+8).
+# Override at runtime with `TZ=America/New_York` etc.
+ARG TZ=Asia/Shanghai
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
+
 # Copy built assets
 COPY --from=builder /app/dist /srv
 

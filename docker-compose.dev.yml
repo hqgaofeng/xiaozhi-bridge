@@ -27,6 +27,7 @@ services:
     environment:
       - XIAOZHI_LOGGING__LEVEL=DEBUG
       - XIAOZHI_LOGGING__FORMAT=console
+      - TZ=Asia/Shanghai
     ports:
       - "8000:8000"
       - "5678:5678"  # debugpy
@@ -41,5 +42,7 @@ services:
       - ./web/public:/app/public:ro
       - ./web/index.html:/app/index.html:ro
       - ./web/vite.config.ts:/app/vite.config.ts:ro
+    environment:
+      - TZ=Asia/Shanghai
     ports:
       - "3000:3000"  # Vite dev server
