@@ -197,8 +197,8 @@ curl http://127.0.0.1:18789/health
 ```
 
 打开浏览器：
-- 本地：http://localhost:8080
-- 生产：https://your-domain.com
+- 本地：http://localhost:5180
+- 生产：https://jarvis.beallen.top
 
 ## 5. 升级
 
@@ -217,18 +217,17 @@ docker compose up -d bridge
 
 ## 6. 备份
 
-需要备份的：
-- `.env`（API key 等）
+V1 是无状态的——对话历史是 V2 才有。建议备份：
+
+- `.env`（如果用了 V2 占位变量；V1 不需要）
 - `config/config.yaml`（应用配置）
-- `deploy/Caddyfile`（HTTPS 配置）
-- 命名 volumes（`xiaozhi-bridge_openclaw-data` 等）
+- `config/openclaw.json`（在宿主上，不在项目里）
 
 ```bash
-# 备份所有 volumes
-docker compose down
-sudo tar -czf xiaozhi-backup-$(date +%Y%m%d).tar.gz \
-    .env config/config.yaml deploy/Caddyfile \
-    /var/lib/docker/volumes/xiaozhi-bridge_*
+# 打包宿主机上的配置
+cd /root/projects/xiaozhi-bridge
+sudo tar -czf xiaozhi-bridge-config-$(date +%Y%m%d).tar.gz \
+    .env config/
 ```
 
 ## 7. 开发模式
@@ -240,22 +239,21 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 特点：
 - 桥接服务：源码挂载，watchmedo 自动重启
-- 智控台：Vite dev server，HMR 热更新
-- Caddy：直连无 HTTPS
+- 智控台：Vite dev server，HMR 热更新（http://localhost:3000）
 - 暴露 debugpy 端口 5678
 
 ## 8. 故障排查
 
-### 8.1 openclaw 启动失败
+### 8.1 openclaw 启动失败（跑在 host 上）
 
 ```bash
-docker compose logs openclaw
+journalctl --user -u openclaw-gateway -n 50
 ```
 
 常见原因：
-- `MINIMAX_API_KEY` 无效
+- `gateway.http.endpoints.chatCompletions.enabled` 未设为 `true`
+- `gateway.bind` 仍是 `loopback`（bridge 容器走 host.docker.internal 会被拒）
 - 端口 18789 冲突
-- openclaw 镜像不存在（需确认镜像名）
 
 ### 8.2 bridge 启动失败
 
@@ -264,8 +262,8 @@ docker compose logs bridge
 ```
 
 常见原因：
-- `config/config.yaml` 不存在或格式错
-- 找不到 `openclaw` 服务（depends_on 等待超时）
+- `config/config.yaml` 不存在（没 `cp config/config.example.yaml config/config.yaml`）
+- `openclaw.api_key` 跟宿主 `~/.openclaw/openclaw.json` 的 `gateway.auth.token` 对不上
 - 端口 8000 冲突
 
 ### 8.3 设备连不上
@@ -273,15 +271,16 @@ docker compose logs bridge
 检查清单：
 - [ ] VPS 防火墙开放 443
 - [ ] 域名 DNS 解析正确
-- [ ] Caddy 拿到证书：`docker compose logs caddy`
-- [ ] 设备的 `WEBSOCKET_URL` 正确
-- [ ] 设备的 `Authorization` Bearer token 跟 `XIAOZHI_DEVICE__AUTH_TOKEN` 一致
+- [ ] nginx 拿到证书：`ls -la /etc/letsencrypt/live/<domain>/`
+- [ ] nginx 反代生效：`nginx -t && systemctl status nginx`
+- [ ] 设备的 `WEBSOCKET_URL` 是 `wss://jarvis.beallen.top/xiaozhi/v1/`
+- [ ] 如果设了 `device.auth_token`，设备的 `Authorization: Bearer ...` 跟 `XIAOZHI_DEVICE__AUTH_TOKEN` 一致
 
 ### 8.4 智控台打不开
 
-- 看 web 容器日志
-- 看 Caddy 反代是否转发到 web
-- 浏览器 DevTools 看 Network
+- 看 web 容器日志：`docker logs xiaozhi-web`
+- 看 nginx 反代是否转发到 web 5180：`curl -I http://127.0.0.1:5180`（应 200）
+- 浏览器 DevTools 看 Network（应看到 `/` 返回 200 + JS bundle）
 
 ## 9. 生产优化建议
 

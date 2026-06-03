@@ -11,14 +11,19 @@ server:
   path: /xiaozhi/v1/
   # WebSocket max message size in bytes (10 MB)
   max_message_size: 10485760
-  # CORS origins for the web admin UI
-  cors_origins:
-    - http://localhost:3000
-    - http://localhost:5173
 
 # OpenClaw gateway (the LLM/agent brain)
 openclaw:
-  base_url: http://127.0.0.1:18789
+  # When running bridge via docker compose (recommended), openclaw runs
+  # natively on the host. From inside the bridge container, 127.0.0.1 is
+  # the container's own loopback — host.docker.internal (mapped via
+  # docker-compose extra_hosts) reaches the host. Make sure the host's
+  # openclaw.json has gateway.bind != "loopback" (we recommend "lan" or
+  # "auto" for single-tenant VPS, "custom" if you have to bind a
+  # specific interface).
+  # If you run bridge outside docker (e.g. for dev), use the host's
+  # loopback directly: http://127.0.0.1:18789.
+  base_url: http://host.docker.internal:18789
   # Gateway auth token (Bearer). Empty disables auth.
   api_key: ""
   # Agent target. "openclaw" routes to the default agent; the actual
@@ -72,14 +77,12 @@ device:
   # If empty, no auth check
   auth_token: ""
   session_id_prefix: xiaozhi
-  # Echo mode: just echo STT text back (testing)
-  echo_mode: false
 
 # MCP / IoT
-mcp:
-  enabled: true
-  # Auto-send initialize request after device hello
-  auto_initialize: true
+# V1: the MCP server is always on. These flags are reserved for V2
+# (where we may need pagination, per-session ACLs, etc.) — keep the
+# section so yaml stays stable but the runtime ignores it for now.
+mcp: {}
 
 # Logging
 logging:

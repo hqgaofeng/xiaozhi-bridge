@@ -1,6 +1,6 @@
 [project]
 name = "xiaozhi-bridge"
-version = "0.1.0"
+version = "0.1.5"
 description = "Lightweight WebSocket bridge for xiaozhi-esp32 devices, with openclaw + M3 as the LLM brain."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,20 +20,27 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
+# --- V1 dependencies (used by running code) ---
 dependencies = [
-    "websockets>=13.0",
-    "pydantic>=2.7",
-    "pydantic-settings>=2.4",
-    "pyyaml>=6.0",
-    "opuslib>=3.0",          # Opus codec
-    "aiohttp>=3.10",          # HTTP client
-    "httpx>=0.27",            # OpenClaw client
-    "edge-tts>=6.1",          # Edge TTS
-    "structlog>=24.4",        # Structured logging
-    "python-multipart>=0.0.9",
-    "PyJWT>=2.9",             # Auth tokens
-    "aiosqlite>=0.20",        # SQLite async (V2)
+    "websockets>=13.0",         # WebSocket server
+    "pydantic>=2.7",            # Message models + config
+    "pydantic-settings>=2.4",   # env-var override (XIAOZHI_*__*)
+    "pyyaml>=6.0",              # config.yaml
+    "opuslib>=3.0",             # Opus codec (audio in/out)
+    "httpx>=0.27",              # openclaw client (async)
+    "structlog>=24.4",          # JSON/console structured logging
 ]
+
+# --- V2 dependencies (NOT installed in V1) ---
+# To enable V2, add an extras_require entry and add the dep here:
+#   "fastapi>=0.115",         # /api/* HTTP layer
+#   "uvicorn[standard]>=0.30",# ASGI server
+#   "aiosqlite>=0.20",        # conversation persistence
+#   "PyJWT>=2.9",             # auth tokens for /api/*
+#   "python-multipart>=0.0.9",# form parsing
+#   "edge-tts>=6.1",          # real TTS
+#   "funasr-onnx>=0.3",       # local ASR (or sherpa-onnx / aliyun)
+#   "aiohttp>=3.10",          # only if you want a WS proxy inside /api/*
 
 [project.optional-dependencies]
 dev = [

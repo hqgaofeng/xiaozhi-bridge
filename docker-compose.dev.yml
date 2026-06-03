@@ -7,6 +7,10 @@
 #   - Mounts source for live reload
 #   - Exposes debug ports
 #   - Lower memory limits for development
+#
+# Note: in dev, the web Vite server runs on :3000 and proxies
+# `/api/*` and `/xiaozhi/*` to the bridge container (configured in
+# web/vite.config.ts). No separate caddy service — same as production.
 
 name: xiaozhi-bridge-dev
 
@@ -39,8 +43,3 @@ services:
       - ./web/vite.config.ts:/app/vite.config.ts:ro
     ports:
       - "3000:3000"  # Vite dev server
-
-  caddy:
-    # In dev, use a permissive Caddyfile without HTTPS
-    volumes:
-      - ./deploy/Caddyfile.dev:/etc/caddy/Caddyfile:ro

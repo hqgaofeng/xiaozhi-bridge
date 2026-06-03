@@ -4,14 +4,17 @@
 
 ## 技术栈
 
-- **React 18** + **TypeScript**
-- **Vite** 构建
-- **Tailwind CSS** 样式
+- **React 18** + **TypeScript 5.6**
+- **Vite 5** 构建
+- **Tailwind CSS 3** 样式
 - **shadcn/ui 风格** 组件（手写精简版）
-- **Zustand** 状态管理
-- **TanStack Query** 服务端状态
-- **React Router** 路由
+- **Zustand** 状态管理（页面切换 + 主题）
 - **Lucide Icons** 图标
+- **Sonner** toast 提示
+
+> V1 智控台**全是 mock 数据**（6 个页面都是占位 UI）—— V2 会接 bridge
+> 的 FastAPI HTTP API（`/api/devices`、`/api/conversations` 等）。V2 计划加
+> TanStack Query、真正的路由、日期库。
 
 ## 快速开始
 
@@ -35,7 +38,7 @@ pnpm build
 
 ```
 src/
-├── App.tsx             # 根组件
+├── App.tsx             # 根组件（V1 用 useUIStore 切页面）
 ├── main.tsx            # 入口
 ├── index.css           # 全局样式（含 CSS 变量主题）
 ├── components/

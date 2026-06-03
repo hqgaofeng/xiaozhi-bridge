@@ -47,7 +47,6 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - bridge-data:/app/data
       - ./config/config.yaml:/app/config.yaml:ro
       # 可选：挂载日志到宿主机
       - ./logs/bridge:/var/log/xiaozhi-bridge
@@ -84,5 +83,6 @@ services:
       - "127.0.0.1:5180:80"
     mem_limit: 50m
 
-volumes:
-  bridge-data:
+# No named volumes — bridge is stateless (config is bind-mounted,
+# logs are bind-mounted). Conversation persistence (V2) will add a
+# volume here.

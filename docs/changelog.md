@@ -6,6 +6,46 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-06-03
+
+### V1 cleanup——"把 V1 折腾彻底"
+
+v0.1.2 初版 v1-release-notes 里有几处“计划中的 V2 工具” 被误列成
+“V1 已实现”。这次复盘（深度读 bridge / web / docs / deploy 全部
+代码）后全面清理。**不是改逻辑**，都是
+“代码不动，删死代码 / 修文档”。
+
+### Removed
+
+- `deploy/` 整个目录（Caddyfile、Caddyfile.dev、install.sh、update.sh、systemd/*.service）—— V1 改用 docker compose + 宿主 nginx，deploy/ 里**所有文件都是 scaffold 时代遗留，没人用**。
+- `docs/deployment.md`—— 整个文件过时（Caddy + systemd + minimax-cn-api provider）。“V1 部署” 见 `deployment-docker.md`。
+- `bridge/src/xiaozhi_bridge/config.py` 里的死字段 `server.cors_origins`、`device.echo_mode`、`mcp.enabled`、`mcp.auto_initialize`——定义了但代码不读。
+- `docker-compose.yml` 里的死 volume `bridge-data:/app/data`——源码不写 `/app/data`。
+- `bridge/pyproject.toml` 里的死依赖 `edge-tts`（V1 不用 Edge TTS）、`aiohttp`（V1 全部用 httpx）。`aiosqlite` / `PyJWT` / `python-multipart` 移到顶部注释（V2 TODO）。
+- `web/package.json` 里的死依赖 `@tanstack/react-query`、`@tanstack/react-router`（V1 全是 mock，不需要）。移到 `"//"` 字段作为 V2 提示。
+- `.env.example` 里的 V1 不用字段 `MINIMAX_API_KEY` / `ALIYUN_AK_*` / `PUBLIC_DOMAIN` / `ACME_EMAIL`。
+- `docker-compose.dev.yml` 里引用 `deploy/Caddyfile.dev` 的 `caddy` service 块（**V1 删了 caddy**，这 override **会让 dev 跑不起来**——这是上轮埋的 bug，现在修）。
+- `bridge-data` / `openclaw-data` 等之前文档里列的“需要备份的 volumes”。
+- `docs/v1-release-notes.md` 错列的 "get_time / get_weather / turn_on/off_light"（没实现）、"ASR 触发 get_weather"（没实现）、"React 19 + Vite 7"（实际 React 18 + Vite 5）、"react-router 7"（实际用 Zustand 切页面，不用路由）、"install.sh 脚本"（V1 不跑）、"systemd unit"（V1 不装）。
+
+### Changed
+
+- `pyproject.toml` version `0.1.0` → `0.1.5`。
+- `config/config.example.yaml` `base_url` 从 `127.0.0.1:18789` → `host.docker.internal:18789`（docker 内是容器 loopback），加注释明说“docker 外调试用 127.0.0.1”。删 `cors_origins` / `echo_mode` / `mcp.enabled` / `mcp.auto_initialize` 段。
+- `web/src/pages/Settings.tsx` 默认值从 `127.0.0.1:18789` / `minimax/MiniMax-M3` → `host.docker.internal:18789` / `openclaw`（跟 v1 实际一致），加 `readOnly`。
+- `docs/architecture.md` 架构图 mcp 块 `get_time / get_weather / turn_on/off` → `device tools (3 个)`。§3.1.6 明确桥接内置工具**只**是 3 个 device 工具，`get_time` / `get_weather` / `turn_on/off` 列为 V2 TODO。§4.2 IoT 例子从 `turn_on_light` 换成 `set_volume`。
+- `docs/v1-release-notes.md` 全面重写（8526 字节）：去掉“谎话工具”，加 “V1 复盘" 提醒。
+- `docs/deployment-docker.md` §4 改 `localhost:8080` → `localhost:5180` / `your-domain.com` → `jarvis.beallen.top`；§6 备份删 Caddyfile / openclaw-data vol；§7 删 “Caddy：直连无 HTTPS”；§8 全部 `docker compose logs openclaw` / `MINIMAX_API_KEY` / `Caddy 拿到证书` / `看 Caddy 反代` 换为 V1 实情（`journalctl` / 宿主机 openclaw 配 / `letsencrypt` 证书路径 / 5180 端口）。
+- `README.md` 项目结构图加 `v1-release-notes.md` / `deployment-docker.md`；tests 26 → 28；删 `deploy/`；技术栈表 “反代 Caddy 2” → “宿主 nginx + Let's Encrypt”。
+- `web/README.md` 删 "TanStack Query" / "React Router"，明说 V1 用 Zustand 切页面。
+- `web/src/lib/api.ts` 保留但加了不调用提示（V1 mock）。Settings 页 6 个输入框加 `readOnly`。
+
+### Notes for V2
+
+- `config.py` 的 `MCPConfig` 类**保留**（V2 要加 pagination cursor / per-session ACL），但运行时不读。
+- 智控台 6 页面**全是 mock**——V2 接 FastAPI HTTP API（`/api/devices` 等）。
+- 12 个 V2 TODO 选一个开始。
+
 ## [0.1.4] - 2026-06-03
 
 ### Fixed

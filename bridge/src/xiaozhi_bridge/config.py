@@ -27,8 +27,10 @@ class ServerConfig(BaseSettings):
     path: str = "/xiaozhi/v1/"
     # WebSocket max message size (10 MB default)
     max_message_size: int = 10 * 1024 * 1024
-    # Allowed CORS origins for the web UI
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    # NOTE: cors_origins was removed in v0.1.5 — V1 ships a raw WebSocket
+    # server (no CORS handshake; the browser-side web admin calls the
+    # bridge's reverse-proxied /api/* via nginx, not direct cross-origin).
+    # If you need it back for V2 (FastAPI), add it there, not here.
 
 
 # --- Section: OpenClaw (LLM) ---
@@ -112,21 +114,29 @@ class DeviceConfig(BaseSettings):
     auth_token: str = ""
     # Session ID prefix
     session_id_prefix: str = "xiaozhi"
-    # Auto-reply for testing
-    echo_mode: bool = False
+    # NOTE: echo_mode was removed in v0.1.5 — was a debug flag nobody wired
+    # up. If you want a debug echo mode in V2, add it back and implement
+    # it in server._process_text (skip the LLM round-trip).
 
 
 # --- Section: MCP / IoT ---
 
 
 class MCPConfig(BaseSettings):
-    """MCP server settings (JSON-RPC 2.0 endpoint)."""
+    """MCP server settings (JSON-RPC 2.0 endpoint).
+
+    V1: kept for compatibility but the server is always enabled and
+    never auto-initializes against the device. The runtime always
+    handles `type: "mcp"` messages if a device sends them.
+    """
 
     model_config = SettingsConfigDict(extra="ignore")
 
-    enabled: bool = True
-    # 是否在握手时自动发 initialize 请求
-    auto_initialize: bool = True
+    # NOTE: enabled / auto_initialize flags were removed in v0.1.5 —
+    # they were defined but never read. The MCP server is always on
+    # (it's the only way the device can call bridge-side tools).
+    # V2 will need real config here (e.g. pagination cursors, per-session
+    # tool ACLs, etc.) — add it then.
 
 
 # --- Section: Logging ---
@@ -160,6 +170,8 @@ class AppConfig(BaseSettings):
     asr: ASRConfig = Field(default_factory=ASRConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     device: DeviceConfig = Field(default_factory=DeviceConfig)
+    # MCP config kept in yaml for future V2 use; the runtime doesn't read
+    # any of its fields right now (the server is always on).
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

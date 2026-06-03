@@ -49,3 +49,8 @@ Thumbs.db
 
 # Local secrets / runtime configs (contain tokens, never commit)
 config/openclaw.json
+
+# Local .env files (root - web/.env* already covered above)
+.env
+.env.local
+.env.production

@@ -151,23 +151,19 @@ xiaozhi-bridge/
 ├── bridge/                     # Python 桥接服务
 │   ├── pyproject.toml
 │   ├── src/xiaozhi_bridge/     # 源码
-│   └── tests/                  # 26 个测试
-├── web/                        # React 智控台
+│   └── tests/                  # 28 个测试
+├── web/                        # React 智控台（V1 全是 mock）
 │   ├── package.json
 │   ├── src/
 │   └── public/
 ├── docs/                       # 文档
-│   ├── architecture.md
-│   ├── protocol.md
-│   ├── api.md
-│   ├── deployment.md
-│   ├── config.md
-│   └── changelog.md
-├── deploy/                     # 部署配置
-│   ├── Caddyfile
-│   ├── Caddyfile.dev
-│   ├── systemd/                # 传统部署（无 Docker）
-│   └── scripts/
+│   ├── architecture.md         # 架构设计
+│   ├── protocol.md             # xiaozhi WebSocket 协议
+│   ├── api.md                  # HTTP API（V2 计划）
+│   ├── deployment-docker.md    # Docker Compose 部署
+│   ├── config.md               # 配置说明
+│   ├── changelog.md            # 版本变更
+│   └── v1-release-notes.md     # V1 发布说明 + 端到端证据
 └── config/
     └── config.example.yaml
 ```
@@ -179,10 +175,10 @@ xiaozhi-bridge/
 | 桥接服务 | Python 3.12 + asyncio | Node.js |
 | WS 框架 | websockets | aiohttp |
 | LLM 客户端 | openclaw gateway | 直接 MiniMax API |
-| 前端 | React 18 + Vite + TypeScript | SvelteKit |
-| 样式 | Tailwind + shadcn 风格 | shadcn-svelte |
+| 前端 | React 18 + Vite 5 + TypeScript | SvelteKit |
+| 样式 | Tailwind 3 + shadcn 风格 | shadcn-svelte |
 | 状态 | Zustand | Redux |
-| 反代 | Caddy 2 | nginx |
+| 反代 | 宿主 nginx + Let's Encrypt | Caddy |
 | 部署 | Docker Compose | systemd |
 | CI | GitHub Actions | — |
 
