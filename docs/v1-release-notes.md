@@ -1,7 +1,7 @@
 # V1 Release Notes
 
-> **版本：** v0.1.5
-> **发布日期：** 2026-06-03
+> **V1 集：** v0.1.2 → v0.1.5（2026-06-03） — V1 端到端跑通。
+> **V2 #3：** v0.2.0（2026-06-03） — FastAPI HTTP API。
 > **GitHub：** https://github.com/hqgaofeng/xiaozhi-bridge
 > **演示地址：** https://jarvis.beallen.top
 

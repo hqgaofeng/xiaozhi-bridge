@@ -6,6 +6,91 @@
 
 ## [Unreleased]
 
+### Done since 0.2.0
+- V2 #3 FastAPI HTTP API — bridge-api service on 8001, 11 routes,
+  aiosqlite + WAL + 6 tables, bridge writes session + conversation
+  events, end-to-end verified on jarvis.beallen.top (2 real M3 turns
+  landed in conversations table).
+
+### Next
+- V2 #4 SQLite conversation persistence (schema already in place;
+  mainly need to surface device_id on hello and backfill 1-to-1
+  device↔session indexing).
+- V2 #5 admin console wired to /api/* (replace mock fetches in
+  web/src/pages/* with real fetch('/api/...') calls).
+- V2 #1 real ASR / V2 #2 real TTS (deprioritized until #5 ships, so
+  the conversations UI shows real data first).
+- V2 #6 multi-device, V2 #7 reverse MCP, V2 #8 OTA, V2 #9 MQTT,
+  V2 #10 voiceprint, V2 #11 RAG, V2 #12 monitoring/alerting/backup.
+
+## [0.2.0] - 2026-06-03
+
+### V2 #3 FastAPI HTTP API
+
+解锁 v0.1.5 智控台 6 页面的" 接真数据" 路径：V2 #3 之前 web/ 下所有
+GET/POST 都是 mock，现在 bridge-api 进程已经在 8001 端口提供
+11 个 HTTP 端点，智控台可以一边（V2 #5）替换 fetch mock 为
+fetch /api/*。
+
+### Added
+
+- 新模块 `bridge/src/xiaozhi_bridge/api/`：FastAPI 应用。
+  - `__init__.py`：说明跨进程 sqlite 架构选型
+  - `__main__.py`：`python -m xiaozhi_bridge.api` 入口
+  - `db.py`：aiosqlite + WAL 模式 + 6 张表（devices, sessions,
+    conversations, iot_devices, iot_state, config_kv） + seed
+    2 个 demo IoT 设备
+  - `main.py`：create_app + lifespan 上下文 + 11 个 /api/* 路由
+- bridge 服务侧集成：每个 session 状态转换调
+  `session.persist_state(db)`、每个完成的 turn 调
+  `db.record_conversation(stt, assistant_text, status)`。所有
+  db 写包在 best-effort try/except，**sqlite 失败不破坏 WebSocket
+  热路径**。
+- docker-compose：新增 `bridge-api` service（127.0.0.1:8001）、
+  共享 `bridge-data` named volume。
+- Dockerfile.bridge：`RUN mkdir -p /app/data && chown app:app` 在
+  `USER app` 之前——为让非 root 进程能写 sqlite。
+- nginx conf：`/api/` 反代从 8000 改为 8001，加 `proxy_buffering
+  off` + 长 read_timeout 支持 SSE。
+- pyproject：加 `fastapi>=0.115` / `uvicorn[standard]>=0.30` /
+  `aiosqlite>=0.20`。
+- 测试：bridge/tests/test_api.py 15 个 TestClient 用例，27→42
+  总数。
+
+### Routes
+
+- `GET    /api/health`              — liveness probe
+- `GET    /api/devices`             — 设备列表（联接活跃 session）
+- `GET    /api/devices/{id}`        — 设备详情
+- `POST   /api/devices/{id}/reboot` — V1 返 501（V2 接入 WS abort）
+- `GET    /api/conversations`       — 对话列表（?deviceId, ?limit）
+- `GET    /api/conversations/{id}`  — 单个对话详情
+- `GET    /api/iot`                 — IoT 设备列表
+- `POST   /api/iot/{id}/control`    — IoT 控制（V1 改 db，V2 接 MCP）
+- `GET    /api/config`              — 配置获取（V1 返空）
+- `PATCH  /api/config`              — 配置写（V1 存 db 不应用）
+- `GET    /api/logs/stream`         — SSE 日志流（V1 heartbeat 占位）
+
+### Architecture 决策
+
+bridge-api **不跟 bridge 共享内存**——它们是两个独立进程，**通过
+sqlite + WAL 模式交换状态**。这是 V2 #3 计划里"Option C"。
+理由：
+
+- 不需要 RPC/MessageBus（额外运行时依赖）
+- V2 #4 SQLite 对话持久化可以**复用**同一套 schema（不需要为
+  API 另起一套）
+- bridge 进程崩溃时 bridge-api 仍可读历史（反过来也）
+- 唯一代价：bridge 写的状态到 API 看到之间最多 ms 级延迟
+
+### End-to-end 验证
+
+- 公网 `https://jarvis.beallen.top/api/health` → 200
+- 公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 跑完一个完整 turn
+  （STT"讲个笑话"→ M3 返程序员笑话 + STT"你好小智"→ M3 返
+  "我是贾维斯"），**2 条记录都进了 sqlite**，从
+  `https://jarvis.beallen.top/api/conversations` 读到。
+
 ## [0.1.5] - 2026-06-03
 
 ### V1 cleanup——"把 V1 折腾彻底"

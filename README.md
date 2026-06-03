@@ -14,13 +14,17 @@
 
 ## 项目状态
 
-✅ **V1 已发布**（v0.1.2，2026-06-03） — 详见 [docs/v1-release-notes.md](docs/v1-release-notes.md)
+✅ **V1 已发布**（v0.1.2 → v0.1.5，2026-06-03） — 详见 [docs/v1-release-notes.md](docs/v1-release-notes.md)
+✅ **V2 #3 已发布**（v0.2.0，2026-06-03） — FastAPI HTTP API（bridge-api 独立进程，11 个 /api/* 端点，aiosqlite + WAL）
 
-**端到端跑通**：从公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 连上 xiaozhi-esp32 协议，走 bridge → openclaw → MiniMax-M3，返回中文实际响应（120+ Opus 帧）。
+**端到端跑通**：
+- WebSocket：从公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 连上 xiaozhi-esp32 协议，走 bridge → openclaw → MiniMax-M3，返回中文实际响应（120+ Opus 帧）。
+- HTTP API：调 `https://jarvis.beallen.top/api/conversations` 能读真 M3 对话记录。
+- 实测两次对话："讲个笑话"→ 程序员笑话、"你好小智"→ "我是贾维斯，不是小智 😄"。
 
 **V1 包含**：WebSocket 协议 / LLM 桥接 / MCP 工具 / Mock ASR+TTS / React 智控台 / Docker Compose / 域名 HTTPS（jarvis.beallen.top）。
 
-**V2 TODO 列表**（12 项）：真实 ASR / 真实 TTS / FastAPI HTTP API / 对话持久化 / Web 接真数据 / 多设备 / 反向 MCP / OTA / MQTT / 声纹 / RAG。
+**V2 TODO 列表**（12 项）：FastAPI HTTP API ✅ / 对话持久化 / Web 接真数据 / 真 ASR / 真 TTS / 多设备 / 反向 MCP / OTA / MQTT / 声纹 / RAG / 监控告警备份。
 
 ## ✨ 特性
 
@@ -31,7 +35,7 @@
 - 📡 **完整协议** — xiaozhi WebSocket + MCP JSON-RPC 2.0
 - 🎨 **现代智控台** — React 19 + TypeScript + Tailwind + shadcn/ui 风格
 - 🧪 **28 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test）
-- 📚 **7 个详细文档** — 架构/协议/API/部署/配置/日志/V1 发布说明
+- 📚 **6 个详细文档** — 架构/协议/API/部署/配置/日志/V1 发布说明
 - 🔒 **隔离会话** — `user: xiaozhi-bridge` 派生独立 session，不污染主会话
 - 🛡️ **真实部署** — `https://jarvis.beallen.top` 公网可访问
 
@@ -148,22 +152,30 @@ xiaozhi-bridge/
 │   │   └── release.yml
 │   ├── ISSUE_TEMPLATE/
 │   └── PULL_REQUEST_TEMPLATE.md
-├── bridge/                     # Python 桥接服务
+├── bridge/                     # Python 桥接服务（WS + V2 #3 HTTP API）
 │   ├── pyproject.toml
 │   ├── src/xiaozhi_bridge/     # 源码
-│   └── tests/                  # 28 个测试
-├── web/                        # React 智控台（V1 全是 mock）
+│   │   ├── api/                # V2 #3 FastAPI HTTP API (bridge-api 进程)
+│   │   │   ├── __init__.py     # 架构选型说明 (Option C：跨进程 sqlite)
+│   │   │   ├── __main__.py     # python -m xiaozhi_bridge.api 入口
+│   │   │   ├── db.py           # aiosqlite + WAL + 6 表
+│   │   │   └── main.py         # FastAPI app + 11 routes
+│   │   ├── asr/ tts/ llm/ mcp/ protocol/  # V1 模块
+│   │   ├── server.py           # bridge WS 进程，集成写 db
+│   │   └── config.py
+│   └── tests/                  # 42 个测试（27 V1 + 15 V2 #3）
+├── web/                        # React 智控台（V1 mock，V2 #5 接 /api/*）
 │   ├── package.json
 │   ├── src/
 │   └── public/
 ├── docs/                       # 文档
 │   ├── architecture.md         # 架构设计
 │   ├── protocol.md             # xiaozhi WebSocket 协议
-│   ├── api.md                  # HTTP API（V2 计划）
+│   ├── api.md                  # HTTP API（V2 #3 已实现）
 │   ├── deployment-docker.md    # Docker Compose 部署
 │   ├── config.md               # 配置说明
 │   ├── changelog.md            # 版本变更
-│   └── v1-release-notes.md     # V1 发布说明 + 端到端证据
+│   └── v1-release-notes.md     # V1 + V2 #3 发布说明
 └── config/
     └── config.example.yaml
 ```

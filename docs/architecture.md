@@ -2,7 +2,7 @@
 
 > 本文档描述 xiaozhi-bridge 的系统架构、模块划分、数据流和设计决策。
 >
-> **V1 现状（2026-06-03）**：bridge 调 openclaw agent 端点（OpenAI 协议）、服务跑在 VPS 上，公网地址 `https://jarvis.beallen.top`。
+> **V1 + V2 #3 现状（2026-06-03）**：bridge 调 openclaw agent 端点（OpenAI 协议）、bridge-api 独立进程提供 HTTP API、两者通过 sqlite + WAL 交换状态。服务跑在 VPS 上，公网地址 `https://jarvis.beallen.top`。
 >
 > 详细版本变更：[changelog.md](changelog.md)。V1 发布说明：[v1-release-notes.md](v1-release-notes.md)。
 
@@ -73,6 +73,7 @@
 | 组件 | 跑在哪 | 端口（对外）| 备注 |
 |---|---|---|---|
 | xiaozhi-bridge (容器) | docker | 127.0.0.1:8000 | WebSocket，loopback |
+| xiaozhi-bridge-api (容器) | docker | 127.0.0.1:8001 | FastAPI HTTP API，loopback |
 | xiaozhi-web (容器) | docker | 127.0.0.1:5180 | React 静态，loopback |
 | openclaw (host) | systemd | 0.0.0.0:18789 | bind=lan |
 | nginx (host) | systemd | 80 / 443 | TLS + 反代 |

@@ -121,10 +121,18 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
     }
 
-    # bridge HTTP API (V2)
+    # bridge HTTP API (V2 #3)
+    # bridge-api 是独立进程，跑到 8001 端口。
+    # proxy_buffering off + 长 read_timeout 让 SSE 日志流能实达。
     location /api/ {
-        proxy_pass http://127.0.0.1:8000/api/;
+        proxy_pass http://127.0.0.1:8001/api/;
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
     }
 
     # bridge WebSocket
