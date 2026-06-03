@@ -167,12 +167,15 @@ xiaozhi 设备与后端通过 **WebSocket** 通信，使用：
 
 ## 5. MCP 协议（JSON-RPC 2.0）
 
-> **方向说明**：MCP 协议原本是设备作为 MCP **server**、后端作为 MCP **client**。
-> 但在我们的实现里，由于 LLM 思考在后端，**我们让后端（bridge + openclaw）作为 MCP client 端**，
-> 设备作为 MCP server 端来**暴露**它的能力（如音量控制、IoT 设备列表等）。
+> **V1 方向**：MCP 协议原本是设备作为 MCP **server**、后端作为 MCP **client**。
+> 在 xiaozhi-bridge 里，bridge 既是 **server**（向设备提供 MCP 端点、让设备能调 `get_time`/`get_weather`/demo 灯控制），
+> 也是 **client**（在握手后向设备请求 `tools/list` 以了解设备能力）。
 >
-> **注意**：原项目中 MCP 主要用于**设备能力发现**（设备有什么 tool 可用）。在我们这里，
-> 大部分 IoT 工具放在 **openclaw 端**（通过 openclaw 的 tool calling），设备只需要执行底层动作。
+> **跟 openclaw 没关系**：bridge 内的 MCP 工具（`get_time`、`get_weather`、`turn_on/off_light`）是 bridge **自己实现**的，
+> openclaw agent 的 tool registry 是**另一套**，bridge 看不到。LLM 思考时调用工具统一走 openclaw 端。
+>
+> **原来的设计**（仅历史参考）：原 xiaozhi 项目里，后端发 MCP 给设备查“设备有什么 tool”。V1 保留了设备能力发现（声音控制、板载 LED 等），
+> 但**普通 IoT 工具** 是在 bridge 里实现，不走 openclaw 的 tool calling。
 
 ### 5.1 方法列表
 
@@ -314,8 +317,9 @@ xiaozhi 设备与后端通过 **WebSocket** 通信，使用：
 ### 8.2 不在协议层做的事
 - ASR（交给 asr 模块）
 - TTS（交给 tts 模块）
-- LLM 思考（交给 llm 模块）
-- 实际 IoT 控制（交给 openclaw tool / mcp 模块）
+- LLM 思考（交给 openclaw agent。bridge 走 `/v1/chat/completions` 流式拉文本，不解析 tool_call）
+- 设备内置 MCP 工具调用（交给 bridge mcp 模块：`bridge/src/xiaozhi_bridge/mcp/`）
+- 外部 IoT / 联网 / 知识（交给 openclaw agent 自带 tool，bridge 看不到细节）
 
 ## 9. 错误处理
 
@@ -370,11 +374,11 @@ xiaozhi 设备与后端通过 **WebSocket** 通信，使用：
 | `self.audio_speaker.set_volume` | bridge → device MCP |
 | `self.light.set_rgb`（板载 LED） | bridge → device MCP |
 | `self.screen.set_brightness`（V2） | bridge → device MCP |
-| **房间灯/风扇/空调**（真实 IoT） | **openclaw tool**（调米家/Home Assistant） |
-| **联网搜索/天气** | **openclaw tool**（LLM 思考时调用） |
-| **闹钟/提醒** | **openclaw tool** |
+| **get_time / get_weather / turn_on/off_light**（内测工具） | **bridge MCP**（`bridge/src/xiaozhi_bridge/mcp/tools.py`） |
+| **联网搜索 / 外部 IoT / 知识** | **openclaw agent 自带 tool**（bridge 看不到细节） |
 
-**架构原则**：
+**V1 架构原则**：
 - **设备层 MCP** = 设备自身能力（音量、屏幕、板载 LED）
-- **openclaw tool** = 外部世界能力（IoT 设备、搜索、知识）
-- LLM 通过 openclaw 的 tool calling 统一调用
+- **bridge MCP** = 内置实用工具（`get_time`、`get_weather`、灯/风扇 demo）。bridge 走 `tools/list` 把自己注册到设备的能力池里，设备发出的 `tools/call` 走 bridge 处理。
+- **openclaw agent tool** = openclaw 内部 agent 框架的 tool（openclaw 走自己的 tool calling、不经过 bridge）。bridge 只**消费** openclaw 返回的最终文本。
+- LLM 不走 bridge 这一侧 tool_call 路径。**bridge 不解析 tool_call**，openclaw agent 内部完成 tool 调用。

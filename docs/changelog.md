@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-03
+
+### Fixed
+- **架构 / 配置 / 协议文档对齐 V1 实际行为**。
+  - `docs/architecture.md` **重写**（13045 字节）：架构图从 docker compose 4 容器改为 “bridge/web 容器 + host 上 openclaw / nginx”；LLM 流程加 openclaw agent + sessionKey 隔离说明；删 “bridge 解析 tool_call” 错述；加 “openclaw tool vs bridge MCP” 区分。
+  - `docs/config.md` §openclaw 块修正：`base_url` 从 `127.0.0.1:18789` 改为 `host.docker.internal:18789`、`model` 从 `minimax/MiniMax-M3` 改为 `openclaw`（agent target）、`api_key` 改为必填并说明从 gateway.auth.token 拿；加 `user` 跟 `backend_model` 说明；加 “V1 不传 tools[] / system” 说明。
+  - `docs/protocol.md` §5（方向说明）、§8.2（不在协议层做的事）、§12（工具实现映射）重写：明确 bridge MCP（get_time / get_weather / turn_on/off_light）是 **bridge 实现**，openclaw agent tool registry 是 **另一套**，bridge 不解析 tool_call。
+
+### Removed
+- **`config/openclaw.json.example`**（V1 scaffold 时期的过时文件）：里面说 openclaw 在 docker 里、要填 MiniMax key 到 `providers`、端口 host: 0.0.0.0。V1 实际是 openclaw 在 host 上跑 systemd、MiniMax key 在 openclaw 自己的 plugin 配置里、不需要这个文件。**删了。**
+
 ## [0.1.3] - 2026-06-03
 
 ### Added

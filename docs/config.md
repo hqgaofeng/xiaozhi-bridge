@@ -30,18 +30,37 @@ server:
 
 ### openclaw
 
-OpenClaw gateway 连接配置。
+OpenClaw gateway 连接配置（bridge 调宿主上跑的 openclaw）。
 
 ```yaml
 openclaw:
-  base_url: http://127.0.0.1:18789   # OpenClaw 地址
-  api_key: ""                         # 通常留空，用 openclaw 自己的 auth
-  model: minimax/MiniMax-M3           # 使用的模型
-  stream: true                         # 流式响应
+  # 容器内调宿主上跑的 openclaw gateway
+  # 从 bridge 容器看 host.docker.internal = docker bridge gateway IP (172.17.0.1)
+  # 要求宿主 openclaw.json 里 gateway.bind != "loopback"（推荐 "lan" / "auto" / "custom"）
+  base_url: http://host.docker.internal:18789
+  # 从宿主 ~/.openclaw/openclaw.json 的 gateway.auth.token 拿
+  # 空字符串 = 不传 Authorization（不推荐）
+  api_key: "<gateway.auth.token>"
+  # agent target 模式：固定填 "openclaw"（走 openclaw default agent）
+  # 实际后端 LLM 由 openclaw 端 agent 配置决定
+  model: openclaw
+  # 可选：强制选后端 LLM（通过 x-openclaw-model header 传）
+  # 例如 "minimax/MiniMax-M3-highspeed"。留空 = 走 openclaw agent 默认。
+  backend_model: ""
+  # 用户会话隔离：openclaw 从 user 派生 sessionKey，不同 user 互不串历史
+  # "xiaozhi-bridge" 派生出的 sessionKey 跟主会话（agent:default-main:openai-user:8682984776）完全独立
+  user: xiaozhi-bridge
+  # 可选：显式 session key（跟 user 二选一）
+  # session_key: ""
+  stream: true
   max_tokens: 4096
   temperature: 0.7
-  timeout: 60.0                        # 请求超时（秒）
+  timeout: 60.0
 ```
+
+**V1 明确不传**：
+- `tools[]` — openclaw 自带 tool registry，外部传的 tools 会被拒绝
+- `system` — 走 openclaw agent 自己的 system prompt（不在 bridge 里写）
 
 ### asr
 
