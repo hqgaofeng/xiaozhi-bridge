@@ -35,14 +35,13 @@ jobs:
         run: uv sync --extra dev
 
       - name: Lint with ruff
-        run: |
-          uv pip install ruff
-          ruff check src tests
+        # `uv run` picks up ruff from the .venv that `uv sync` set up
+        # (dev deps include `ruff>=0.6`). Don't `uv pip install ruff`
+        # separately — that can pick up a different version.
+        run: uv run ruff check src tests
 
       - name: Type check with mypy
-        run: |
-          uv pip install mypy
-          mypy src
+        run: uv run mypy src
 
       - name: Run tests
         run: uv run pytest tests/ -v --cov=src --cov-report=xml --cov-report=term
@@ -67,9 +66,10 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          node-version: "22.12.0"  # Pin to a known-working version
+          # Skip cache: pnpm here — it makes setup-node fail
+          # fast on missing lock file lookups, and pnpm install
+          # is fast enough without cache on CI.
 
       - name: Install pnpm
         run: npm install -g pnpm
