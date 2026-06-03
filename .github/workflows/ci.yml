@@ -44,7 +44,11 @@ jobs:
         run: uv run --no-sync mypy src
 
       - name: Run tests
-        run: uv run pytest tests/ -v --cov=src --cov-report=xml --cov-report=term
+        # --cov is dropped on CI: pytest-cov has been finicky in
+        # some runner environments and we don't track coverage
+        # right now. Tests still assert the contract; coverage
+        # is for human-driven audits locally.
+        run: uv run --no-sync pytest tests/ -v
 
       # Coverage upload is disabled — we don't have a Codecov
       # token configured and the public uploader is rate-limited
@@ -80,7 +84,14 @@ jobs:
         run: pnpm lint || true  # 暂时不强制
 
       - name: Build
-        run: pnpm build
+        # Clean tsc -b composite artifacts before build (the
+        # tsconfig.node.json has composite: true which leaves
+        # .d.ts/.js/.tsbuildinfo on disk; a clean checkout
+        # doesn't have them so vite.config is "missing" in
+        # some environments).
+        run: |
+          rm -f tsconfig*.tsbuildinfo vite.config.d.ts vite.config.js
+          pnpm build
 
   # --- Docker build sanity check ---
   docker-build:
