@@ -101,6 +101,21 @@ class SessionContext:
             to_state=new_state.value,
         )
 
+    async def persist_state(self, db) -> None:
+        """V2 #3: write last_state to the bridge db. Best-effort.
+
+        The db argument is a BridgeDB (or any object with
+        update_session_state()); we accept untyped to avoid a
+        circular import between states.py and api.db.
+        """
+        if db is None:
+            return
+        try:
+            await db.update_session_state(self.session_id, self.state.value)
+        except Exception:
+            # Persistence failure must not break the turn
+            pass
+
     def append_audio(self, pcm: bytes) -> None:
         """Append PCM audio to the current turn's buffer."""
         self.pcm_buffer.extend(pcm)

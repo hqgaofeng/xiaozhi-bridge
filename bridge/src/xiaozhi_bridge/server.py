@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 import websockets
@@ -87,8 +88,30 @@ class XiaozhiBridgeServer:
         # WebSocket server
         self._server: Any = None
 
+        # V2 #3: optional sqlite db for cross-process state with the
+        # HTTP API. Set via XIAOZHI_API__DB_PATH; if the API module
+        # is importable AND the db is reachable, we write through.
+        # Failures here MUST NOT break the websocket hot path.
+        self._db = None
+        if os.environ.get("XIAOZHI_API__DB_PATH"):
+            try:
+                from .api.db import BridgeDB
+                # Don't reuse the API process's singleton — bridge
+                # gets its own connection to the same file.
+                self._db = BridgeDB(path=os.environ["XIAOZHI_API__DB_PATH"])
+            except Exception as e:
+                self.log.warning("db.init_failed", error=str(e))
+
     async def start(self) -> None:
         """Start the WebSocket server."""
+        if self._db is not None:
+            try:
+                await self._db.connect()
+                self.log.info("db.connected", path=str(self._db.path))
+            except Exception as e:
+                self.log.warning("db.connect_failed", error=str(e))
+                self._db = None
+
         self.log.info(
             "server.starting",
             host=self.config.server.host,
@@ -125,6 +148,11 @@ class XiaozhiBridgeServer:
             self._server.close()
             await self._server.wait_closed()
         await self.llm.close()
+        if self._db is not None:
+            try:
+                await self._db.close()
+            except Exception:
+                pass
         self.log.info("server.stopped")
 
     async def serve_forever(self) -> None:
@@ -191,6 +219,13 @@ class XiaozhiBridgeServer:
                 device_id=device_id,
             )
 
+            # V2 #3: persist to sqlite for the HTTP API
+            if self._db is not None:
+                try:
+                    await self._db.open_session(session.session_id, device_id)
+                except Exception as e:
+                    self.log.warning("db.open_session_failed", error=str(e))
+
             # Send server hello
             server_hello = ServerHello(
                 session_id=session.session_id,
@@ -207,6 +242,12 @@ class XiaozhiBridgeServer:
             self.log.exception("connection.error", peer=peer)
         finally:
             if session:
+                # V2 #3: close session in db before evicting
+                if self._db is not None:
+                    try:
+                        await self._db.close_session(session.session_id)
+                    except Exception as e:
+                        self.log.warning("db.close_session_failed", error=str(e))
                 self.sessions.pop(session.session_id, None)
                 # Clean up cached codec
                 self._codecs.pop(session.session_id, None)
@@ -241,6 +282,12 @@ class XiaozhiBridgeServer:
                         self.log.warning("message.unexpected_hello", session_id=session.session_id)
                     case _:
                         self.log.warning("message.unhandled", type=type(msg).__name__)
+
+    async def _transition(self, session: SessionContext, new_state) -> None:
+        """V2 #3 helper: transition + persist to db (best-effort)."""
+        session.transition(new_state)
+        if self._db is not None:
+            await session.persist_state(self._db)
 
     # --- Message handlers ---
 
@@ -290,7 +337,7 @@ class XiaozhiBridgeServer:
         )
 
         if msg.state == "start":
-            session.transition(SessionState.LISTENING)
+            await self._transition(session, SessionState.LISTENING)
             session.pcm_buffer.clear()
         elif msg.state == "stop":
             # User stopped recording → run ASR → LLM → TTS pipeline
@@ -308,7 +355,7 @@ class XiaozhiBridgeServer:
     ) -> None:
         """Handle abort."""
         self.log.info("abort.received", session_id=session.session_id, reason=msg.reason)
-        session.transition(SessionState.IDLE)
+        await self._transition(session, SessionState.IDLE)
         # TBD: cancel any in-flight LLM/TTS
 
     async def _handle_mcp(
@@ -339,10 +386,10 @@ class XiaozhiBridgeServer:
         pcm = session.clear_audio()
         if not pcm:
             self.log.info("turn.empty_audio", session_id=session.session_id)
-            session.transition(SessionState.IDLE)
+            await self._transition(session, SessionState.IDLE)
             return
 
-        session.transition(SessionState.THINKING)
+        await self._transition(session, SessionState.THINKING)
 
         # 1) ASR: PCM → text
         try:
@@ -354,12 +401,12 @@ class XiaozhiBridgeServer:
         except Exception:
             self.log.exception("asr.failed")
             await self._send_tts(ws, session, "抱歉，我没听清楚。")
-            session.transition(SessionState.IDLE)
+            await self._transition(session, SessionState.IDLE)
             return
 
         text = asr_result.text.strip()
         if not text:
-            session.transition(SessionState.IDLE)
+            await self._transition(session, SessionState.IDLE)
             return
 
         # Send STT result to device (so it can show on screen)
@@ -384,7 +431,7 @@ class XiaozhiBridgeServer:
         system prompts, so we only stream the user text in and consume
         the assistant's text back. No tool_calls flow through here.
         """
-        session.transition(SessionState.THINKING)
+        await self._transition(session, SessionState.THINKING)
         session.current_text = text
         session.current_turn_id += 1
 
@@ -406,7 +453,7 @@ class XiaozhiBridgeServer:
         except Exception:
             self.log.exception("llm.stream_failed")
             await self._send_tts(ws, session, "抱歉，我的大脑出错了。")
-            session.transition(SessionState.IDLE)
+            await self._transition(session, SessionState.IDLE)
             return
 
         full_text = "".join(full_text_parts).strip()
@@ -426,9 +473,22 @@ class XiaozhiBridgeServer:
         # 3) TTS — stream the text
         await self._send_tts(ws, session, full_text)
 
+        # V2 #3: persist the turn (user text + assistant text) to sqlite
+        if self._db is not None:
+            try:
+                await self._db.record_conversation(
+                    device_id=session.device_id,
+                    session_id=session.session_id,
+                    stt_text=text,
+                    assistant_text=full_text,
+                    llm_status="ok",
+                )
+            except Exception as e:
+                self.log.warning("db.record_conversation_failed", error=str(e))
+
         # Clear audio buffer after the turn is complete
         session.clear_audio()
-        session.transition(SessionState.IDLE)
+        await self._transition(session, SessionState.IDLE)
 
     async def _send_tts(
         self,
@@ -441,7 +501,7 @@ class XiaozhiBridgeServer:
         Streams:
           tts.start → tts.sentence_start,text → Opus frames → tts.stop
         """
-        session.transition(SessionState.SPEAKING)
+        await self._transition(session, SessionState.SPEAKING)
 
         # TTS start
         await ws.send(serialize_server_message(

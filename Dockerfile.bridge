@@ -62,6 +62,11 @@ ENV XIAOZHI_LOGGING__FORMAT=json
 # Working dir
 WORKDIR /app
 
+# V2 #3: create the data dir BEFORE switching to non-root so
+# `app` (uid 999) owns it. The bridge-db volume mounts here and
+# the bridge-api process must be able to write the sqlite file.
+RUN mkdir -p /app/data && chown -R app:app /app/data
+
 # Switch to non-root
 USER app
 

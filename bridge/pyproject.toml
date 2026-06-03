@@ -1,6 +1,6 @@
 [project]
 name = "xiaozhi-bridge"
-version = "0.1.5"
+version = "0.2.0"
 description = "Lightweight WebSocket bridge for xiaozhi-esp32 devices, with openclaw + M3 as the LLM brain."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
-# --- V1 dependencies (used by running code) ---
+# --- V1 + V2 dependencies (all used by running code) ---
 dependencies = [
     "websockets>=13.0",         # WebSocket server
     "pydantic>=2.7",            # Message models + config
@@ -29,17 +29,17 @@ dependencies = [
     "opuslib>=3.0",             # Opus codec (audio in/out)
     "httpx>=0.27",              # openclaw client (async)
     "structlog>=24.4",          # JSON/console structured logging
+    "fastapi>=0.115",           # /api/* HTTP layer (V2 #3)
+    "uvicorn[standard]>=0.30",  # ASGI server (V2 #3)
+    "aiosqlite>=0.20",          # conversation persistence (V2 #3)
 ]
 
-# --- V2 dependencies (NOT installed in V1) ---
-# To enable V2, add an extras_require entry and add the dep here:
-#   "fastapi>=0.115",         # /api/* HTTP layer
-#   "uvicorn[standard]>=0.30",# ASGI server
-#   "aiosqlite>=0.20",        # conversation persistence
-#   "PyJWT>=2.9",             # auth tokens for /api/*
+# --- Future (V2 / V3) dependencies (NOT installed yet) ---
+# Add when needed:
+#   "PyJWT>=2.9",             # auth tokens for /api/* (V2 #3 follow-up)
 #   "python-multipart>=0.0.9",# form parsing
-#   "edge-tts>=6.1",          # real TTS
-#   "funasr-onnx>=0.3",       # local ASR (or sherpa-onnx / aliyun)
+#   "edge-tts>=6.1",          # real TTS (V2 #2)
+#   "funasr-onnx>=0.3",       # local ASR (V2 #1) or sherpa-onnx / aliyun
 #   "aiohttp>=3.10",          # only if you want a WS proxy inside /api/*
 
 [project.optional-dependencies]

@@ -28,10 +28,26 @@ services:
       - XIAOZHI_LOGGING__LEVEL=DEBUG
       - XIAOZHI_LOGGING__FORMAT=console
       - TZ=Asia/Shanghai
+      - XIAOZHI_API__DB_PATH=/app/data/bridge.db
     ports:
       - "8000:8000"
       - "5678:5678"  # debugpy
     mem_limit: 400m
+
+  bridge-api:
+    build:
+      target: builder
+    command: >
+      watchmedo auto-restart --directory=/app/src --pattern=*.py --recursive --
+      python -m xiaozhi_bridge.api --host 0.0.0.0 --port 8001 --reload
+    volumes:
+      - ./bridge/src:/app/src:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - XIAOZHI_API__DB_PATH=/app/data/bridge.db
+    ports:
+      - "8001:8001"
+    mem_limit: 200m
 
   web:
     build:

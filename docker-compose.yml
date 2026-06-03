@@ -46,10 +46,6 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
-    volumes:
-      - ./config/config.yaml:/app/config.yaml:ro
-      # 可选：挂载日志到宿主机
-      - ./logs/bridge:/var/log/xiaozhi-bridge
     environment:
       # openclaw runs on the host. From inside the bridge container,
       # 127.0.0.1 is the container's own loopback — host.docker.internal
@@ -62,6 +58,18 @@ services:
       # time instead of UTC. The V2 /api/logs/stream consumer should
       # also use this for consistency.
       - TZ=Asia/Shanghai
+      # V2 #3: share sqlite db with the bridge-api process. The path
+      # must match the bridge-api service below; the volume mount
+      # keeps the file alive across container restarts.
+      - XIAOZHI_API__DB_PATH=/app/data/bridge.db
+    volumes:
+      - ./config/config.yaml:/app/config.yaml:ro
+      # V2 #3: named volume for sqlite so the api process can read
+      # what the bridge process writes (and so the data survives
+      # `docker compose down`).
+      - bridge-data:/app/data
+      # Optional: also mount logs to the host for easy tailing.
+      - ./logs/bridge:/var/log/xiaozhi-bridge
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -71,6 +79,36 @@ services:
       retries: 3
       start_period: 10s
     mem_limit: 200m  # bridge 本身很轻
+
+  # ============================================================
+  # V2 #3: HTTP API (FastAPI on port 8001)
+  # ============================================================
+  # Reads from the same sqlite db the bridge writes to. Separate
+  # process = can restart either independently; reads stay live while
+  # bridge restarts (and vice versa).
+  bridge-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: xiaozhi-bridge-api
+    restart: unless-stopped
+    command: ["python", "-m", "xiaozhi_bridge.api", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - bridge-data:/app/data
+    environment:
+      - XIAOZHI_API__DB_PATH=/app/data/bridge.db
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=2).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 100m
+    depends_on:
+      - bridge
 
   # ============================================================
   # Web admin console (static SPA)
@@ -91,6 +129,9 @@ services:
       - TZ=Asia/Shanghai
     mem_limit: 50m
 
-# No named volumes — bridge is stateless (config is bind-mounted,
-# logs are bind-mounted). Conversation persistence (V2) will add a
-# volume here.
+# V2 #3: bridge-data is a named volume for sqlite (the bridge
+# process writes session/conversation rows; the bridge-api process
+# reads them). Without the volume the file would live in the bridge
+# container's ephemeral filesystem and the API couldn't see it.
+volumes:
+  bridge-data:
