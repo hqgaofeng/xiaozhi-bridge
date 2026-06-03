@@ -40,9 +40,18 @@ class OpenClawConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
     base_url: str = "http://127.0.0.1:18789"
-    api_key: str = ""  # 默认通过 auth profile
-    # 编码/对话使用的模型
-    model: str = "minimax/MiniMax-M3"
+    api_key: str = ""  # Gateway auth token (Bearer)
+    # Agent target. "openclaw" routes to the default agent; the actual
+    # backend LLM is selected inside openclaw (and can be overridden via
+    # the `x-openclaw-model` header or openclaw's own config).
+    model: str = "openclaw"
+    # Optional backend LLM override (sent as x-openclaw-model header).
+    backend_model: str = ""
+    # Stable per-caller session id; openclaw uses this to derive a
+    # deterministic sessionKey and keep sessions isolated between
+    # distinct callers (e.g. multiple ESP32 devices).
+    user: str = "xiaozhi-bridge"
+    session_key: str = ""
     # 是否流式响应
     stream: bool = True
     # 最大上下文 token

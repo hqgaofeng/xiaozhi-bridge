@@ -82,10 +82,18 @@ cp config/config.example.yaml config/config.yaml
 # 3. 修改 Caddy 域名（生产）
 # 编辑 deploy/Caddyfile，把 YOUR_DOMAIN 改成你的域名
 
-# 4. 启动
+# 4. **重要：开启 openclaw 的 chatCompletions endpoint**
+# openclaw 默认不暴露 /v1/chat/completions。编辑 openclaw 配置
+# （一般是 ~/.openclaw/openclaw.json），在 gateway 下加：
+#
+#   "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
+#
+# 然后重启 openclaw gateway（systemctl --user restart openclaw-gateway）。
+
+# 5. 启动
 docker compose up -d
 
-# 5. 查看日志
+# 6. 查看日志
 docker compose logs -f bridge
 ```
 

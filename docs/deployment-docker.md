@@ -69,6 +69,38 @@ docker compose ps
 docker compose logs -f
 ```
 
+### 2.6 开启 openclaw 的 chatCompletions endpoint（重要）
+
+openclaw 默认不暴露 `/v1/chat/completions`，bridge 需要这个端点。
+在宿主机的 openclaw 配置（一般是 `~/.openclaw/openclaw.json`）的
+`gateway` 块下加：
+
+```json
+{
+  "gateway": {
+    "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
+  }
+}
+```
+
+然后重启 openclaw gateway：
+
+```bash
+systemctl --user restart openclaw-gateway
+# 或 openclaw gateway stop && openclaw gateway start
+```
+
+验证： 
+
+```bash
+curl -s -X POST http://127.0.0.1:18789/v1/chat/completions \
+  -H "Authorization: Bearer <你的 gateway token>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openclaw","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+返回 200 + JSON 响应即可。
+
 ## 3. 服务清单
 
 启动后会有 4 个容器：

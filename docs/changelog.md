@@ -6,6 +6,44 @@
 
 ## [Unreleased] - V1 开发中
 
+## [0.1.1] - 2026-06-03
+
+### Fixed
+- **bridge 跟 openclaw 通信协议从错的 Anthropic-style 换成对的 OpenAI-style**
+  - 之前 f50970b 推送的版本调 `/v1/messages` 永远 404，LLM 实际没接通。
+  - 现在调 openclaw 的 `/v1/chat/completions`，**真 M3 响应**已被测试验证。
+- **鉴权头从 `x-api-key` 换成 `Authorization: Bearer <token>`**（openclaw gateway 期望）。
+- **model 字段语义变更**：从上游 LLM id (`minimax/MiniMax-M3`) 改成 openclaw agent target (`openclaw`)。
+  上游 LLM 由 openclaw 自己选；需要覆盖时用 `x-openclaw-model: minimax/MiniMax-M3-highspeed` header。
+- **Session 隔离**：bridge 调 openclaw 时传 `user: "xiaozhi-bridge"`，派生独立 session key
+  (`openai-user:xiaozhi-bridge`)，跟 main session 不互串。
+
+### Changed
+- `bridge/src/xiaozhi_bridge/llm/openclaw.py` 整文件重写：OpenAI 兼容流式客户端，只收文本不再解析 tool_calls。
+- `bridge/src/xiaozhi_bridge/llm/prompts.py` 删 `IOT_CONTROL_TOOL` / `SEARCH_TOOL` / `get_default_tools`：
+  web_search 走 openclaw 内置，IoT 走 bridge 的 MCP 通道，LLM 客户端不再负责工具调度。
+- `bridge/src/xiaozhi_bridge/server.py` 的 `_process_text` 删 `tool_call` 收集 / 执行分支，简化成
+  纯文本流：LLM in → text out → TTS。
+- `config/config.example.yaml` 改 `openclaw.model: openclaw`，加 `backend_model` / `user` / `session_key` 字段。
+- `bridge/src/xiaozhi_bridge/config.py` 默认 `model: "openclaw"`，新增 `backend_model` / `user` / `session_key` 字段。
+
+### Added
+- `bridge/tests/test_openclaw_live.py`：真调 openclaw gateway 的集成测试（需 `OPENCLAW_LIVE_TEST=1` 才跑）。
+- `docs/architecture.md` §3.1.5 重写 LLM 客户端说明，强调 agent-target 模式。
+- `docs/deployment-docker.md` §2.6：加 "开启 openclaw chatCompletions endpoint" 部署步骤。
+- `README.md` 部署步骤加同样提示。
+
+### Removed
+- `llm/prompts.py` 里的 `IOT_CONTROL_TOOL`、`SEARCH_TOOL`、`get_default_tools` 全部删除。
+- `server.py` 不再 import `LLMTool`、`build_system_prompt`、`get_default_tools`。
+
+### Migration Notes
+- **必须**在 openclaw 配置里开启 `gateway.http.endpoints.chatCompletions.enabled: true`，
+  并重启 openclaw gateway。否则 bridge 启动后所有 LLM 调用会 401/404。
+- `config/config.yaml` 里如果还写 `model: minimax/MiniMax-M3`，需要改为 `model: openclaw`
+  （或加 `backend_model: minimax/MiniMax-M3-highspeed` 作为 header 覆盖）。
+
+
 ### Added
 - 项目初始化：完整目录结构、文档骨架
 - Bridge（Python 桥接服务）：

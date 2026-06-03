@@ -123,13 +123,18 @@ class LLMClient(Protocol):
     async def chat_stream(
         self, messages: list[dict], tools: list[dict] | None = None
     ) -> AsyncIterator[LLMEvent]:
-        """对话流式响应，yield LLMEvent（文本片段 / 工具调用 / 完成）"""
+        """对话流式响应，yield LLMEvent（文本片段 / 完成）"""
         ...
 ```
 
-- `openclaw.py`：调用 openclaw gateway 的 `/v1/chat/completions`
-- 支持 tool calling
-- 支持 system prompt 注入（角色、性格、设备上下文）
+- `openclaw.py`：调用 openclaw gateway 的 `/v1/chat/completions`（OpenAI 兼容）
+- **Agent target 模式**：`model` 字段取 `"openclaw"`（不是上游 LLM id），由 openclaw 自己选择后端模型
+- **可选后端覆盖**：`x-openclaw-model: minimax/MiniMax-M3-highspeed` header 可强制选 LLM
+- **Session 隔离**：传 `user: "xiaozhi-bridge"`，openclaw 派生固定 session key，跟其他调用方历史隔离
+- **鉴权**：`Authorization: Bearer <gateway.auth.token>`
+- **不传 `tools[]`**：openclaw 自带 web_search / IoT 控制等 tool 调度；外部传 `tools[]` 会被拒
+- **不传 system prompt**：由 openclaw agent 自己的 system prompt 控制（可在 openclaw.json 里配）
+- `prompts.py`：保留语音助手人设参考模板，供 openclaw agent 配置用
 
 #### 3.1.6 MCP 服务 (`mcp/`)
 

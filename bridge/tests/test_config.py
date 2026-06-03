@@ -13,7 +13,7 @@ def test_default_config():
     assert config.server.port == 8000
     assert config.asr.provider == "mock"
     assert config.tts.provider == "mock"
-    assert config.openclaw.model == "minimax/MiniMax-M3"
+    assert config.openclaw.model == "openclaw"
 
 
 def test_config_from_yaml(tmp_path: Path):

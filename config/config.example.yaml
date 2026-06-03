@@ -16,13 +16,25 @@ server:
     - http://localhost:3000
     - http://localhost:5173
 
-# OpenClaw gateway (the LLM brain)
+# OpenClaw gateway (the LLM/agent brain)
 openclaw:
   base_url: http://127.0.0.1:18789
-  api_key: ""  # usually empty; openclaw uses its own auth profile
-  # Which model to use
-  model: minimax/MiniMax-M3
-  # Use streaming responses (recommended)
+  # Gateway auth token (Bearer). Empty disables auth.
+  api_key: ""
+  # Agent target. "openclaw" routes to the default agent; the actual
+  # backend LLM is selected inside openclaw. To override, set
+  # `backend_model` (sent as the `x-openclaw-model` header).
+  model: openclaw
+  # Override the backend LLM (e.g. "minimax/MiniMax-M3-highspeed").
+  # Leave empty to use whatever openclaw's agent config picks.
+  backend_model: ""
+  # Stable per-caller session id. openclaw derives a deterministic
+  # sessionKey from this, so two devices / integrations using different
+  # `user` values never share conversation history.
+  user: xiaozhi-bridge
+  # Optional: explicit session key (overrides `user` if both set).
+  # session_key: ""
+  # Use streaming responses (recommended; required by the bridge).
   stream: true
   max_tokens: 4096
   temperature: 0.7

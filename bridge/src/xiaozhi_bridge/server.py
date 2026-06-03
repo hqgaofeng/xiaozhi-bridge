@@ -22,8 +22,6 @@ from .asr import get_asr
 from .config import AppConfig
 from .llm import get_llm
 from .llm.base import Message as LLMMessage_
-from .llm.base import Tool as LLMTool
-from .llm.prompts import build_system_prompt, get_default_tools
 from .mcp import MCPServer
 from .protocol import (
     AbortMessage,
@@ -381,44 +379,25 @@ class XiaozhiBridgeServer:
         """Process a text input (from ASR or wake word detect).
 
         Drives: LLM streaming → TTS streaming → audio chunks.
+
+        V1: openclaw owns tool dispatch (web_search, etc.) and per-agent
+        system prompts, so we only stream the user text in and consume
+        the assistant's text back. No tool_calls flow through here.
         """
         session.transition(SessionState.THINKING)
         session.current_text = text
         session.current_turn_id += 1
 
-        # Build messages for LLM
-        messages = [
-            LLMMessage_(role="user", content=text),
-        ]
-        system_prompt = build_system_prompt(
-            device_name="小智音箱",
-            user_location="北京",
-            iot_devices=[],
-        )
-        tools = [
-            LLMTool(
-                name=t["name"],
-                description=t["description"],
-                parameters=t["input_schema"],
-            )
-            for t in get_default_tools()
-        ]
+        # Build messages for LLM (single user turn; openclaw keeps the
+        # rest of the conversation history keyed by the `user` field).
+        messages = [LLMMessage_(role="user", content=text)]
 
         # Stream LLM
         full_text_parts: list[str] = []
-        tool_calls: list[dict] = []
-
         try:
-            async for event in self.llm.chat_stream(
-                messages=messages,
-                tools=tools,
-                system=system_prompt,
-            ):
+            async for event in self.llm.chat_stream(messages=messages):
                 if event.kind == "text" and event.text:
                     full_text_parts.append(event.text)
-                elif event.kind == "tool_call" and event.tool_call:
-                    tool_calls.append(event.tool_call)
-                    self.log.info("llm.tool_call", name=event.tool_call.get("name"))
                 elif event.kind == "done":
                     break
                 elif event.kind == "error":
@@ -432,18 +411,10 @@ class XiaozhiBridgeServer:
 
         full_text = "".join(full_text_parts).strip()
 
-        if not full_text and not tool_calls:
+        if not full_text:
             full_text = "嗯，我还没想好怎么回答。"
 
-        # If we have tool calls but no text, run them and call LLM again
-        if tool_calls and not full_text:
-            # TBD: actually execute tool calls (V2: delegate to openclaw)
-            full_text = "好的，已经处理。"
-        elif tool_calls:
-            # Add a sentence indicating action was taken
-            full_text = (full_text + " " if full_text else "") + "好的，已经处理。"
-
-        # Send LLM emotion/text
+        # Send LLM emotion/text cue
         await ws.send(serialize_server_message(
             LLMMessage(
                 session_id=session.session_id,
