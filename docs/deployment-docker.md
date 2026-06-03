@@ -12,6 +12,8 @@ docker --version
 docker compose version
 ```
 
+另外，**本项目使用宿主上已有的 nginx 做 HTTPS 反代**（因为 VPS 上 nginx 已经在 80/443 上服了其他子域名）。需要你的 nginx 跑着、占着 80/443；本项目**不再**起容器内的 caddy（参看 `docker-compose.yml` 中已删除的 caddy service）。
+
 ## 2. 第一次部署
 
 ### 2.1 克隆
@@ -21,40 +23,133 @@ git clone https://github.com/hqgaofeng/xiaozhi-bridge.git
 cd xiaozhi-bridge
 ```
 
-### 2.2 配置环境变量
-
-```bash
-cp .env.example .env
-nano .env
-
-# Also create openclaw.json from template:
-cp config/openclaw.json.example config/openclaw.json
-nano config/openclaw.json  # fill in MiniMax API key
-```
-
-填入：
-- `MINIMAX_API_KEY` — MiniMax API key
-- `LOG_LEVEL` — `INFO`（生产）/ `DEBUG`（调试）
-- 可选：`XIAOZHI_DEVICE__AUTH_TOKEN` — 设备鉴权 token
-
-### 2.3 配置应用
+### 2.2 配置 bridge
 
 ```bash
 cp config/config.example.yaml config/config.yaml
 nano config/config.yaml
 ```
 
-### 2.4 修改 Caddy 域名
+`config.yaml` 里：
 
-```bash
-nano deploy/Caddyfile
-# 把 YOUR_DOMAIN 改成你的实际域名
-# 例：xiaozhi.example.com
+```yaml
+openclaw:
+  base_url: http://host.docker.internal:18789
+  api_key: "<你的 openclaw gateway token>"
+  model: openclaw
+  user: xiaozhi-bridge
 ```
 
-需要先：
-- 域名 DNS A 记录指向 VPS IP
-- 80/443 端口开放
+`api_key` 在宿主机 `~/.openclaw/openclaw.json` 的 `gateway.auth.token` 字段。
+`config.yaml` 在 `.gitignore` 里——不会被 commit。
+
+### 2.3 准备宿主上的 openclaw（必做）
+
+`xiaozhi-bridge` 通过 `host.docker.internal` 调宿主上的 openclaw，需要
+两步让 openclaw 可用：
+
+#### 2.3.1 开启 chatCompletions endpoint
+
+bridge 调 openclaw 的 `/v1/chat/completions`，openclaw 默认**不**暴露这个端点。
+在宿主 `~/.openclaw/openclaw.json` 的 `gateway` 块下加：
+
+```json
+{
+  "gateway": {
+    "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
+  }
+}
+```
+
+#### 2.3.2 把 openclaw 绑到非 loopback
+
+openclaw 默认只听 `127.0.0.1`，bridge 容器从 `host.docker.internal` 走不通。
+把 `gateway.bind` 改成 `lan`（绑定 0.0.0.0）或 `auto`：
+
+```json
+{
+  "gateway": {
+    "bind": "lan"
+  }
+}
+```
+
+```bash
+openclaw config validate    # 确认合法
+systemctl --user restart openclaw-gateway
+ss -tlnp | grep 18789       # 应看到 0.0.0.0:18789
+```
+
+**安全提醒**：`bind: lan` 会让 openclaw 在 VPS 内网所有接口监听。如果你的
+VPS 内网有其他租户/不可信用户，**不要**用 `lan`，改用 `custom` 绑一个内网 IP：
+
+```json
+{
+  "gateway": {
+    "bind": "custom",
+    "customBindHost": "172.17.0.1"   // docker bridge gateway IP
+  }
+}
+```
+
+### 2.4 准备宿主上的 nginx（必做，因为容器内的 caddy 已删）
+
+本项目**不再**起 caddy service（删了，避免和已有 nginx 抢 80/443）。
+改用宿主上已经在 80/443 的 nginx 加一个 server block：
+
+```bash
+nano /etc/nginx/conf.d/jarvis.beallen.top.conf
+```
+
+```nginx
+server {
+    listen 80;
+    server_name jarvis.beallen.top;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name jarvis.beallen.top;
+    ssl_certificate     /etc/letsencrypt/live/jarvis.beallen.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/jarvis.beallen.top/privkey.pem;
+
+    # Web 智控台
+    location / {
+        proxy_pass http://127.0.0.1:5180;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # bridge HTTP API (V2)
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/api/;
+        proxy_set_header Host $host;
+    }
+
+    # bridge WebSocket
+    location /xiaozhi/ {
+        proxy_pass http://127.0.0.1:8000/xiaozhi/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+
+    # 健康检查
+    location = /health {
+        proxy_pass http://127.0.0.1:8000/health;
+    }
+}
+```
+
+签证书：
+
+```bash
+certbot certonly --nginx -d jarvis.beallen.top \
+  --email you@example.com --agree-tos --no-eff-email
+nginx -t && systemctl reload nginx
+```
 
 ### 2.5 启动
 
@@ -69,50 +164,18 @@ docker compose ps
 docker compose logs -f
 ```
 
-### 2.6 开启 openclaw 的 chatCompletions endpoint（重要）
-
-openclaw 默认不暴露 `/v1/chat/completions`，bridge 需要这个端点。
-在宿主机的 openclaw 配置（一般是 `~/.openclaw/openclaw.json`）的
-`gateway` 块下加：
-
-```json
-{
-  "gateway": {
-    "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
-  }
-}
-```
-
-然后重启 openclaw gateway：
-
-```bash
-systemctl --user restart openclaw-gateway
-# 或 openclaw gateway stop && openclaw gateway start
-```
-
-验证： 
-
-```bash
-curl -s -X POST http://127.0.0.1:18789/v1/chat/completions \
-  -H "Authorization: Bearer <你的 gateway token>" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"openclaw","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
-```
-
-返回 200 + JSON 响应即可。
-
 ## 3. 服务清单
 
-启动后会有 4 个容器：
+启动后会有 2 个容器（openclaw 在 host 上，不在 docker 里）：
 
 | 服务 | 端口 | 内存限制 | 说明 |
 |---|---|---|---|
-| `xiaozhi-openclaw` | 18789 (内) | 800MB | LLM 推理 |
-| `xiaozhi-bridge` | 8000 (内) | 200MB | 桥接服务 |
-| `xiaozhi-web` | 80 (内) | 50MB | 智控台静态文件 |
-| `xiaozhi-caddy` | 80, 443 (外) | 100MB | 反代 + HTTPS |
+| `xiaozhi-bridge` | 127.0.0.1:8000 | 200MB | 桥接服务（WebSocket） |
+| `xiaozhi-web` | 127.0.0.1:5180 | 50MB | 智控台静态文件 |
+| openclaw (host) | 0.0.0.0:18789 | 200-300MB | LLM/agent 运行时 |
+| nginx (host) | 80, 443 | - | 反代 + HTTPS |
 
-总内存上限：~1.2GB
+总内存上限：~500MB（不算 openclaw 和 nginx）
 
 ## 4. 验证
 
@@ -120,14 +183,17 @@ curl -s -X POST http://127.0.0.1:18789/v1/chat/completions \
 # 检查所有服务健康
 docker compose ps
 
-# 智控台
-curl -I http://localhost:8080
+# 智控台 (本机直连)
+curl -I http://127.0.0.1:5180
 
-# Bridge WebSocket（应返回 426 Upgrade Required）
-curl -I http://localhost:8000/xiaozhi/v1/
+# 域名 HTTPS
+curl -I https://jarvis.beallen.top
 
-# OpenClaw 健康
-curl http://localhost:18789/health
+# Bridge WebSocket (本机直连)
+curl -I http://127.0.0.1:8000/xiaozhi/v1/
+
+# OpenClaw 健康 (本机)
+curl http://127.0.0.1:18789/health
 ```
 
 打开浏览器：

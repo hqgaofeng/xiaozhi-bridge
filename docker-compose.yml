@@ -1,52 +1,40 @@
 # xiaozhi-bridge Docker Compose
 #
-# Single-host deployment for all three services:
-#   - openclaw    (LLM gateway, uses external image)
-#   - bridge      (Python WebSocket bridge, built from Dockerfile.bridge)
-#   - web         (React admin console, built from Dockerfile.web)
-#   - caddy       (Reverse proxy + automatic HTTPS)
+# V1 deployment for two services (bridge + web), fronted by the host's
+# nginx (with TLS termination + Let's Encrypt for jarvis.beallen.top).
+#
+# Why no caddy / why bridge and web bind to 127.0.0.1 only:
+#   - The host already runs nginx on :80/:443 serving other subdomains
+#     (mesh.beallen.top, news.beallen.top, etc.). Adding another
+#     HTTPS-terminating reverse proxy in a container would conflict.
+#   - Caddy is removed (C1 from the deployment plan). The web container
+#     exposes its built SPA on 127.0.0.1:5180, and nginx in
+#     /etc/nginx/conf.d/jarvis.beallen.top.conf proxies public traffic
+#     to 127.0.0.1:5180 (web) and 127.0.0.1:8000 (bridge).
+#
+# Why no openclaw service here:
+#   - openclaw runs natively on the host (systemd --user), not in Docker.
+#     bridge reaches it via http://host.docker.internal:18789 (added
+#     by the extra_hosts directive below) or simply by the host's
+#     loopback gateway IP from inside the bridge container.
+#   - If you want openclaw in Docker too, re-add the openclaw service
+#     from git history (it was here before this change).
 #
 # Usage:
-#   docker compose up -d           # start everything
-#   docker compose down            # stop everything
+#   docker compose up -d           # start bridge + web
 #   docker compose logs -f bridge  # follow bridge logs
-#   docker compose restart bridge  # restart one service
 #
 # First time:
 #   1. Copy .env.example to .env and fill in values
-#   2. Edit Caddy config in deploy/Caddyfile (change YOUR_DOMAIN)
-#   3. docker compose up -d
+#   2. Copy config/config.example.yaml to config/config.yaml
+#   3. Make sure openclaw's chatCompletions endpoint is enabled
+#      (gateway.http.endpoints.chatCompletions.enabled: true) and
+#      restart the host openclaw.
+#   4. docker compose up -d
 
 name: xiaozhi-bridge
 
 services:
-  # ============================================================
-  # OpenClaw gateway (LLM runtime)
-  # ============================================================
-  openclaw:
-    image: openclaw/openclaw:latest
-    container_name: xiaozhi-openclaw
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:18789:18789"
-    volumes:
-      - openclaw-data:/root/.openclaw
-      - ./config/openclaw.json:/root/.openclaw/openclaw.json:ro
-      # NOTE: copy config/openclaw.json.example to config/openclaw.json
-      # and fill in your MiniMax API key before `docker compose up`.
-    environment:
-      - OPENCLAW_GATEWAY_PORT=18789
-      - NODE_ENV=production
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18789/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    networks:
-      - xiaozhi-net
-    mem_limit: 800m  # openclaw 自身吃得多
-
   # ============================================================
   # Python bridge (WebSocket + protocol layer)
   # ============================================================
@@ -56,9 +44,6 @@ services:
       dockerfile: Dockerfile.bridge
     container_name: xiaozhi-bridge
     restart: unless-stopped
-    depends_on:
-      openclaw:
-        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -67,17 +52,20 @@ services:
       # 可选：挂载日志到宿主机
       - ./logs/bridge:/var/log/xiaozhi-bridge
     environment:
-      - XIAOZHI_OPENCLAW__BASE_URL=http://openclaw:18789
+      # openclaw runs on the host. From inside the bridge container,
+      # 127.0.0.1 is the container's own loopback — host.docker.internal
+      # (mapped via extra_hosts) reaches the host.
+      - XIAOZHI_OPENCLAW__BASE_URL=http://host.docker.internal:18789
       - XIAOZHI_LOGGING__LEVEL=${LOG_LEVEL:-INFO}
       - XIAOZHI_LOGGING__FORMAT=json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 8000)); s.close()"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    networks:
-      - xiaozhi-net
     mem_limit: 200m  # bridge 本身很轻
 
   # ============================================================
@@ -91,39 +79,10 @@ services:
     restart: unless-stopped
     depends_on:
       - bridge
-    expose:
-      - "80"  # only internal, behind caddy
-    networks:
-      - xiaozhi-net
+    ports:
+      # Loopback only; host nginx (jarvis.beallen.top) proxies here.
+      - "127.0.0.1:5180:80"
     mem_limit: 50m
 
-  # ============================================================
-  # Caddy reverse proxy (HTTPS termination)
-  # ============================================================
-  caddy:
-    image: caddy:2-alpine
-    container_name: xiaozhi-caddy
-    restart: unless-stopped
-    depends_on:
-      - bridge
-      - web
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    networks:
-      - xiaozhi-net
-    mem_limit: 100m
-
 volumes:
-  openclaw-data:
   bridge-data:
-  caddy-data:
-  caddy-config:
-
-networks:
-  xiaozhi-net:
-    driver: bridge

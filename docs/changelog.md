@@ -6,6 +6,26 @@
 
 ## [Unreleased] - V1 开发中
 
+## [0.1.2] - 2026-06-03
+
+### Fixed
+- **部署到 jarvis.beallen.top 全栈端到端走通**：从公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 走 nginx → bridge → openclaw → M3 返回中文带工具调用的实际响应（5 消息 133 个 Opus 帧）。
+- **bridge 容器内 `base_url` 修正**：`config.example.yaml` 默认是 `http://127.0.0.1:18789`，这在容器内是容器自己 loopback（不通）。改为 `http://host.docker.internal:18789`（需在 `docker-compose.yml` 中加 `extra_hosts: host.docker.internal:host-gateway`）。
+- **openclaw bind 从 loopback 改为 lan**：默认 openclaw 只听 127.0.0.1，bridge 容器连不上。改为 `lan`（绑 0.0.0.0）。
+
+### Changed
+- **`docker-compose.yml` 大改**：
+  - 删 caddy service（跟宿主上已有 nginx 抢 80/443 冲突）。
+  - web 改 loopback `127.0.0.1:5180:80`（替代 caddy 80 端口）。
+  - bridge 加 `extra_hosts: host.docker.internal:host-gateway`。
+  - 删 openclaw service（openclaw 在 host 上跑 systemd，不在 docker 里）。
+  - 删 openclaw-data / caddy-data / caddy-config volumes。
+- **`docs/deployment-docker.md` §2 重写**：原结构里 caddy / 4-container 部署跟新方案不匹配，重写为 5 步（clone / config / 宿主 openclaw / 宿主 nginx / docker up），明确"caddy 已删、改用宿主 nginx"。
+- **`.gitignore` 增 `config/openclaw.json`**：防止误把运行时 openclaw 配置 commit 进项目。
+
+### Added
+- `docs/deployment-docker.md` 新增 `§2.3` openclaw bind 模式 + 安全性讨论、`§2.4` nginx 反代示例。
+
 ## [0.1.1] - 2026-06-03
 
 ### Fixed
