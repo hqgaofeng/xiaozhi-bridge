@@ -9,10 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import yaml
-
 
 # --- Section: Server ---
 
@@ -156,7 +155,7 @@ class AppConfig(BaseSettings):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "AppConfig":
+    def from_yaml(cls, path: str | Path) -> AppConfig:
         """Load config from YAML file, then apply env overrides."""
         path = Path(path)
         if not path.exists():

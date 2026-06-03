@@ -49,9 +49,9 @@ dev = [
 xiaozhi-bridge = "xiaozhi_bridge.main:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/xiaozhi-bridge"
-Documentation = "https://github.com/yourusername/xiaozhi-bridge/tree/main/docs"
-Issues = "https://github.com/yourusername/xiaozhi-bridge/issues"
+Homepage = "https://github.com/hqgaofeng/xiaozhi-bridge"
+Documentation = "https://github.com/hqgaofeng/xiaozhi-bridge/tree/main/docs"
+Issues = "https://github.com/hqgaofeng/xiaozhi-bridge/issues"
 
 [build-system]
 requires = ["hatchling"]

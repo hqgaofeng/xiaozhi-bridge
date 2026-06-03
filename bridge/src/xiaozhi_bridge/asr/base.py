@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Any, Type
+from typing import Any
 
 
 @dataclass
@@ -61,7 +61,7 @@ class ASRError(Exception):
 # --- Registry ---
 
 
-_REGISTRY: dict[str, Type[ASRBase]] = {}
+_REGISTRY: dict[str, type[ASRBase]] = {}
 
 
 def register_asr(name: str):
@@ -73,7 +73,7 @@ def register_asr(name: str):
             ...
     """
 
-    def decorator(cls: Type[ASRBase]) -> Type[ASRBase]:
+    def decorator(cls: type[ASRBase]) -> type[ASRBase]:
         cls.name = name
         _REGISTRY[name] = cls
         return cls

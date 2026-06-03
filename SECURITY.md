@@ -53,7 +53,7 @@ For production deployments:
 
 - Watch the GitHub repo for security advisories
 - `docker compose pull && docker compose up -d` to update
-- Subscribe to releases: https://github.com/yourusername/xiaozhi-bridge/releases
+- Subscribe to releases: https://github.com/hqgaofeng/xiaozhi-bridge/releases
 
 ## Known Limitations
 

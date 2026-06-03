@@ -1,6 +1,6 @@
 """LLM client implementations."""
 
-from .base import LLMClient, LLMEvent, Message, Tool, register_llm, get_llm, list_llm_providers
 from . import openclaw  # noqa: F401
+from .base import LLMClient, LLMEvent, Message, Tool, get_llm, list_llm_providers, register_llm
 
-__all__ = ["LLMClient", "LLMEvent", "Message", "Tool", "register_llm", "get_llm", "list_llm_providers"]
+__all__ = ["LLMClient", "LLMEvent", "Message", "Tool", "get_llm", "list_llm_providers", "register_llm"]

@@ -11,38 +11,36 @@ Each connection runs an independent asyncio task with its own SessionContext.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import time
 from typing import Any
 
 import websockets
 from websockets.legacy.server import WebSocketServerProtocol
 
+from .asr import get_asr
 from .config import AppConfig
+from .llm import get_llm
+from .llm.base import Message as LLMMessage_
+from .llm.base import Tool as LLMTool
+from .llm.prompts import build_system_prompt, get_default_tools
+from .mcp import MCPServer
 from .protocol import (
     AbortMessage,
     HelloMessage,
-    LLMMessage,
     ListenMessage,
+    LLMMessage,
     MCPMessage,
     ServerHello,
     SessionContext,
     SessionState,
     STTMessage,
-    SystemMessage,
     TTSMessage,
     parse_client_message,
     serialize_server_message,
 )
 from .protocol.audio import make_codec
-from .asr import get_asr
 from .tts import get_tts
-from .llm import get_llm
-from .llm.prompts import build_system_prompt, get_default_tools
-from .llm.base import Message as LLMMessage_, Tool as LLMTool
-from .mcp import MCPServer
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +48,31 @@ log = logging.getLogger(__name__)
 # --- Main server class ---
 
 
+def _get_header(ws: WebSocketServerProtocol, name: str, default: str | None = None) -> str | None:
+    """Read a header from a WebSocket connection, supporting both
+    websockets.legacy (ws.request_headers) and websockets ≥14 (ws.handshake.headers).
+    """
+    # Legacy API (websockets < 14, used by pyproject's loose dep)
+    if hasattr(ws, "request_headers"):
+        return ws.request_headers.get(name, default)
+    # New API
+    hs = getattr(ws, "handshake", None)
+    if hs is not None and getattr(hs, "headers", None) is not None:
+        # websockets.http.Headers is a dict-like with .get
+        return hs.headers.get(name, default)
+    return default
+
+
+
 class XiaozhiBridgeServer:
     """WebSocket server that handles xiaozhi-esp32 devices."""
 
     def __init__(self, config: AppConfig):
         self.config = config
-        self.log = logging.getLogger(self.__class__.__name__)
+        # Use structlog to match the structured `info("event", key=value)`
+        # call sites used throughout this module.
+        from .utils.logging import get_logger
+        self.log = get_logger(self.__class__.__name__)
 
         # Initialize components
         self.asr = get_asr(config.asr.provider, config.asr.options)
@@ -157,7 +174,7 @@ class XiaozhiBridgeServer:
 
             # Optional auth check
             if self.config.device.auth_token:
-                auth = ws.request_headers.get("Authorization", "")
+                auth = _get_header(ws, "Authorization", "")
                 expected = f"Bearer {self.config.device.auth_token}"
                 if auth != expected:
                     self.log.warning("handshake.unauthorized", peer=peer)
@@ -165,7 +182,7 @@ class XiaozhiBridgeServer:
                     return
 
             # Get device id from header
-            device_id = ws.request_headers.get("Device-Id")
+            device_id = _get_header(ws, "Device-Id")
 
             # Create session
             session = SessionContext.from_hello(msg, device_id=device_id)
@@ -336,7 +353,7 @@ class XiaozhiBridgeServer:
                 sample_rate=session.audio_params.sample_rate,
                 channels=session.audio_params.channels,
             )
-        except Exception as e:
+        except Exception:
             self.log.exception("asr.failed")
             await self._send_tts(ws, session, "抱歉，我没听清楚。")
             session.transition(SessionState.IDLE)
@@ -472,14 +489,35 @@ class XiaozhiBridgeServer:
         # TTS audio chunks
         try:
             tts_sr = 24000  # typical for xiaozhi playback
-            tts_codec = make_codec(sample_rate=tts_sr, channels=1, frame_duration_ms=60)
+            tts_frame_ms = 60
+            tts_codec = make_codec(
+                sample_rate=tts_sr, channels=1, frame_duration_ms=tts_frame_ms
+            )
+            tts_frame_bytes = tts_sr * tts_frame_ms // 1000 * 2  # int16
+            # If the codec is a real OpusCodec, encode PCM → Opus before sending.
+            # PassThroughCodec (no libopus) just forwards bytes as-is.
+            from .protocol.audio import OpusCodec
+            do_encode = isinstance(tts_codec, OpusCodec)
+
+            pcm_buf = bytearray()
             async for chunk in self.tts.synthesize_stream(text, sample_rate=tts_sr):
                 if not chunk.pcm:
                     continue
-                # V1: pass through PCM (no Opus encoding)
-                # V2: encode to Opus before sending
-                # TODO: detect if TTS codec supports encoding and apply
-                await ws.send(chunk.pcm)
+                pcm_buf.extend(chunk.pcm)
+                # Emit complete frames; keep any tail in the buffer.
+                while len(pcm_buf) >= tts_frame_bytes:
+                    frame = bytes(pcm_buf[:tts_frame_bytes])
+                    del pcm_buf[:tts_frame_bytes]
+                    if do_encode:
+                        frame = tts_codec.encode(frame)
+                    await ws.send(frame)
+            # Flush any trailing PCM (pad with silence to a full frame).
+            if pcm_buf:
+                pad_samples = (tts_frame_bytes - len(pcm_buf)) // 2
+                frame = bytes(pcm_buf) + b"\x00\x00" * pad_samples
+                if do_encode:
+                    frame = tts_codec.encode(frame)
+                await ws.send(frame)
         except Exception:
             self.log.exception("tts.failed")
 

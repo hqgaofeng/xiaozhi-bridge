@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Type
+from typing import Any
 
 
 @dataclass
@@ -61,11 +62,11 @@ class TTSError(Exception):
 # --- Registry ---
 
 
-_REGISTRY: dict[str, Type[TTSBase]] = {}
+_REGISTRY: dict[str, type[TTSBase]] = {}
 
 
 def register_tts(name: str):
-    def decorator(cls: Type[TTSBase]) -> Type[TTSBase]:
+    def decorator(cls: type[TTSBase]) -> type[TTSBase]:
         cls.name = name
         _REGISTRY[name] = cls
         return cls

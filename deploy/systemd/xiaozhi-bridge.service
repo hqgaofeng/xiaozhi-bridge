@@ -1,6 +1,6 @@
 [Unit]
 Description=xiaozhi-bridge - WebSocket bridge for xiaozhi-esp32 devices
-Documentation=https://github.com/yourusername/xiaozhi-bridge
+Documentation=https://github.com/hqgaofeng/xiaozhi-bridge
 After=network.target openclaw-gateway.service
 Wants=openclaw-gateway.service
 

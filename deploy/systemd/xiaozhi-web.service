@@ -1,6 +1,6 @@
 [Unit]
 Description=xiaozhi-bridge web admin (static file server)
-Documentation=https://github.com/yourusername/xiaozhi-bridge
+Documentation=https://github.com/hqgaofeng/xiaozhi-bridge
 After=network.target
 
 [Service]

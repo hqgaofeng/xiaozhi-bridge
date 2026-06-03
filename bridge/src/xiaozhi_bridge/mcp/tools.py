@@ -13,10 +13,10 @@ openclaw-side tool calls (for off-board capabilities like IoT).
 from __future__ import annotations
 
 import abc
-import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Any:
     log.info("tool.call", name=name, arguments=arguments)
     try:
         result = await handler(arguments)
-    except Exception as e:
+    except Exception:
         log.exception("tool.error", name=name)
         raise
     return result

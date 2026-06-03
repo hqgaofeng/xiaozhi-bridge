@@ -13,7 +13,6 @@ import random
 
 from .base import ASRBase, ASRResult, register_asr
 
-
 _MOCK_PHRASES_ZH = [
     "你好小智",
     "今天天气怎么样",

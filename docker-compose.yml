@@ -32,6 +32,8 @@ services:
     volumes:
       - openclaw-data:/root/.openclaw
       - ./config/openclaw.json:/root/.openclaw/openclaw.json:ro
+      # NOTE: copy config/openclaw.json.example to config/openclaw.json
+      # and fill in your MiniMax API key before `docker compose up`.
     environment:
       - OPENCLAW_GATEWAY_PORT=18789
       - NODE_ENV=production

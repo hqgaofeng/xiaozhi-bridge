@@ -6,7 +6,7 @@
 >
 > 目标：单台 1-2G 内存 VPS 稳定运行，**Docker Compose 一键部署**
 
-[![CI](https://github.com/yourusername/xiaozhi-bridge/workflows/CI/badge.svg)](https://github.com/yourusername/xiaozhi-bridge/actions)
+[![CI](https://github.com/hqgaofeng/xiaozhi-bridge/workflows/CI/badge.svg)](https://github.com/hqgaofeng/xiaozhi-bridge/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)
 ![Node 22+](https://img.shields.io/badge/node-22+-green.svg)
@@ -69,7 +69,7 @@ xiaozhi-esp32 硬件 (ESP32-S3)
 
 ```bash
 # 1. 克隆
-git clone https://github.com/yourusername/xiaozhi-bridge.git
+git clone https://github.com/hqgaofeng/xiaozhi-bridge.git
 cd xiaozhi-bridge
 
 # 2. 配置

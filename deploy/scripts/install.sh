@@ -2,7 +2,7 @@
 # xiaozhi-bridge installation script
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/yourusername/xiaozhi-bridge/main/deploy/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/hqgaofeng/xiaozhi-bridge/main/deploy/scripts/install.sh | bash
 #   # or
 #   ./deploy/scripts/install.sh
 
@@ -37,7 +37,10 @@ fi
 # --- 3. Python venv ---
 echo "==> Setting up Python virtualenv"
 cd "${REPO_DIR}/bridge"
-uv sync --extra dev
+# Note: pyproject.toml uses hatchling backend, so we need `uv venv` +
+# `uv pip install`, not `uv sync` (which only works with uv-native projects).
+uv venv .venv
+uv pip install --python .venv/bin/python -e ".[dev]"
 
 # --- 4. Web UI ---
 echo "==> Building web admin UI"

@@ -9,8 +9,10 @@
 # ============================================================
 FROM node:22-alpine AS builder
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install pnpm (pin to a version that still runs build scripts by default
+# so we don't have to wire up `pnpm.onlyBuiltDependencies` approval files
+# for esbuild's native binary postinstall).
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
 WORKDIR /app
 

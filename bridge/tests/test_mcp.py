@@ -3,8 +3,8 @@
 import pytest
 
 from xiaozhi_bridge.mcp import MCPServer
-from xiaozhi_bridge.mcp.tools import clear_tools, register_function
 from xiaozhi_bridge.mcp.server import JSONRPCErrorCode
+from xiaozhi_bridge.mcp.tools import clear_tools, register_function
 
 
 @pytest.fixture(autouse=True)

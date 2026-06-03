@@ -7,9 +7,9 @@ calls the openclaw gateway's Anthropic-compatible /v1/messages endpoint.
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Type
-
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any
 
 # --- Data types ---
 
@@ -93,11 +93,11 @@ class LLMClient(abc.ABC):
 # --- Registry ---
 
 
-_REGISTRY: dict[str, Type[LLMClient]] = {}
+_REGISTRY: dict[str, type[LLMClient]] = {}
 
 
 def register_llm(name: str):
-    def decorator(cls: Type[LLMClient]) -> Type[LLMClient]:
+    def decorator(cls: type[LLMClient]) -> type[LLMClient]:
         cls.name = name
         _REGISTRY[name] = cls
         return cls

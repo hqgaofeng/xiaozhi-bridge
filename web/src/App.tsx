@@ -1,4 +1,3 @@
-import { create } from 'zustand'
 import { Toaster } from 'sonner'
 import { Sidebar } from '@/components/Sidebar'
 import { Topbar } from '@/components/Topbar'

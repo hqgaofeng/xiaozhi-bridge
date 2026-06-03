@@ -17,7 +17,7 @@ docker compose version
 ### 2.1 克隆
 
 ```bash
-git clone https://github.com/yourusername/xiaozhi-bridge.git
+git clone https://github.com/hqgaofeng/xiaozhi-bridge.git
 cd xiaozhi-bridge
 ```
 
@@ -26,6 +26,10 @@ cd xiaozhi-bridge
 ```bash
 cp .env.example .env
 nano .env
+
+# Also create openclaw.json from template:
+cp config/openclaw.json.example config/openclaw.json
+nano config/openclaw.json  # fill in MiniMax API key
 ```
 
 填入：

@@ -67,7 +67,7 @@ class SessionContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_hello(cls, hello: HelloMessage, device_id: str | None = None) -> "SessionContext":
+    def from_hello(cls, hello: HelloMessage, device_id: str | None = None) -> SessionContext:
         """Create a new session from a hello message."""
         return cls(
             session_id=make_session_id(),

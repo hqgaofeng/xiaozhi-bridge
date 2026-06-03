@@ -1,17 +1,18 @@
 """Tests for the xiaozhi protocol message parsing."""
 
 import json
+
 import pytest
 
 from xiaozhi_bridge.protocol.messages import (
+    AbortMessage,
     HelloMessage,
     ListenMessage,
-    AbortMessage,
     MCPMessage,
     ServerHello,
+    make_session_id,
     parse_client_message,
     serialize_server_message,
-    make_session_id,
 )
 
 

@@ -87,7 +87,7 @@ def main() -> int:
     )
 
     # Print startup info
-    print(f"xiaozhi-bridge starting...")
+    print("xiaozhi-bridge starting...")
     print(f"  config: {args.config}")
     print(f"  ws URL: ws://{config.server.host}:{config.server.port}{config.server.path}")
     print(f"  asr:    {config.asr.provider}")

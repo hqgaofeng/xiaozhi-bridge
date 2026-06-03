@@ -54,7 +54,7 @@ curl http://127.0.0.1:18789/health
 ### 方式 A：一键脚本
 
 ```bash
-git clone https://github.com/yourusername/xiaozhi-bridge /root/projects/xiaozhi-bridge
+git clone https://github.com/hqgaofeng/xiaozhi-bridge /root/projects/xiaozhi-bridge
 cd /root/projects/xiaozhi-bridge
 ./deploy/scripts/install.sh
 ```
@@ -63,7 +63,7 @@ cd /root/projects/xiaozhi-bridge
 
 ```bash
 # 1. 克隆
-git clone https://github.com/yourusername/xiaozhi-bridge /root/projects/xiaozhi-bridge
+git clone https://github.com/hqgaofeng/xiaozhi-bridge /root/projects/xiaozhi-bridge
 
 # 2. Python 桥接
 cd /root/projects/xiaozhi-bridge/bridge

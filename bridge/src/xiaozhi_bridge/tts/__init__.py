@@ -1,6 +1,6 @@
 """TTS (Text-to-Speech) abstraction."""
 
-from .base import TTSBase, TTSChunk, register_tts, get_tts, list_tts_providers
 from . import mock  # noqa: F401
+from .base import TTSBase, TTSChunk, get_tts, list_tts_providers, register_tts
 
-__all__ = ["TTSBase", "TTSChunk", "register_tts", "get_tts", "list_tts_providers"]
+__all__ = ["TTSBase", "TTSChunk", "get_tts", "list_tts_providers", "register_tts"]

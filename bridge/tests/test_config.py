@@ -1,7 +1,8 @@
 """Tests for config loading."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from xiaozhi_bridge.config import AppConfig
 

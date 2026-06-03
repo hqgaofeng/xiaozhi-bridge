@@ -95,9 +95,10 @@ export const api = {
 
   // --- Logs (SSE) ---
   streamLogs(onEvent: (line: string) => void): EventSource {
-    return new EventSource(`${BASE}/logs/stream`)
-      // Note: actual parsing of SSE happens in the consumer
-      .addEventListener('message', (e) => onEvent((e as MessageEvent).data))
+    // Note: actual parsing of SSE happens in the consumer
+    const source = new EventSource(`${BASE}/logs/stream`)
+    source.addEventListener('message', (e) => onEvent((e as MessageEvent).data))
+    return source
   },
 }
 

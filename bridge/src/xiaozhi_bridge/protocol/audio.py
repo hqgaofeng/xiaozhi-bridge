@@ -11,7 +11,6 @@ for microphone upload, and 24 kHz for TTS playback. We support both.
 from __future__ import annotations
 
 import asyncio
-import struct
 
 # Note: opuslib is a thin wrapper around libopus. On systems without
 # libopus installed, imports will fail. We isolate this in try/except so
@@ -51,12 +50,15 @@ class OpusCodec:
                 "apt install libopus0 libopus-dev"
             )
 
-        app_map = {
-            "voip": opuslib.api.decoder.APPLICATION_VOIP,
-            "audio": opuslib.api.decoder.APPLICATION_AUDIO,
-            "lowdelay": opuslib.api.decoder.APPLICATION_RESTRICTED_LOWDELAY,
-        }
-        self._app = app_map.get(application, opuslib.api.decoder.APPLICATION_VOIP)
+        # opuslib 3.0+ takes the application as a string ('voip' | 'audio'
+        # | 'restricted_lowdelay'), not the old opuslib.api.decoder constants
+        # which were removed in the rewrite.
+        valid_apps = ("voip", "audio", "restricted_lowdelay")
+        if application in ("lowdelay",):
+            application = "restricted_lowdelay"
+        if application not in valid_apps:
+            application = "voip"
+        self._app = application
         self._decoder: opuslib.Decoder | None = None
         self._encoder: opuslib.Encoder | None = None
 
@@ -112,7 +114,7 @@ class PassThroughCodec:
     channels: int = 1
     frame_size: int = 960
 
-    def __init__(self, *args, **kwargs) -> None:  # noqa: D401
+    def __init__(self, *args, **kwargs) -> None:
         pass
 
     def decode(self, opus_frame: bytes) -> bytes:
