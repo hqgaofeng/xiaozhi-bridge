@@ -16,7 +16,7 @@
 - **数据格式**：JSON
 - **CORS**：默认放行 `http://localhost:3000`、`http://localhost:5180`、`https://jarvis.beallen.top`
 
-## 端点（V2 #3 已实现，v0.2.0）
+## 端点（V2 #3 + V2 #4 已实现，v0.2.1）
 
 ### Health
 
@@ -30,6 +30,7 @@
 |---|---|---|---|
 | `GET` | `/api/devices` | 列出所有设备（联接活跃 session） | ✅ |
 | `GET` | `/api/devices/{id}` | 设备详情 | ✅ 200 / 404 |
+| `GET` | `/api/devices/{id}/conversations` | 单设备对话列表（?limit=1..500） | ✅ V2 #4 新增 |
 | `POST` | `/api/devices/{id}/reboot` | 重启设备 | ⏳ 501（V2 接入 WS abort） |
 
 #### `GET /api/devices`
@@ -48,13 +49,17 @@
 ]
 ```
 
+> V2 #4：`id` 为 `"unknown"` 是合成设备，表示 firmware 未发
+> `Device-Id` header。所有这种“匿名”会话都会进这个桶，智控台
+> 可以看到 并查证是否为 ESP32 固件 bug。
+
 ### Conversations 对话
 
 | 方法 | 路径 | 说明 | 状态 |
 |---|---|---|---|
 | `GET` | `/api/conversations` | 列出对话（?deviceId, ?limit=1..500） | ✅ |
 | `GET` | `/api/conversations/{id}` | 对话详情（id 整数） | ✅ 200 / 400 / 404 |
-| `GET` | `/api/conversations/{id}/audio/{turn}` | 音频流 | ❌ V2 #4 TODO |
+| `GET` | `/api/conversations/{id}/audio/{turn}` | 音频流 | ❌ V2 #6 TODO |
 
 #### `GET /api/conversations`
 

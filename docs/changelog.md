@@ -6,22 +6,64 @@
 
 ## [Unreleased]
 
-### Done since 0.2.0
-- V2 #3 FastAPI HTTP API — bridge-api service on 8001, 11 routes,
-  aiosqlite + WAL + 6 tables, bridge writes session + conversation
-  events, end-to-end verified on jarvis.beallen.top (2 real M3 turns
-  landed in conversations table).
+### Done since 0.2.1
+- V2 #4 SQLite conversation persistence refinement — `upsert_device`
+  and `open_session` now accept `device_id=None` (firmware that
+  forgot to send a Device-Id header gets bucketed under a synthetic
+  "unknown" device row, so /api/devices stops appearing empty for
+  misbehaving firmware). New `GET /api/devices/{id}/conversations`
+  route for per-device history. 11 new unit tests in
+  tests/test_db.py + tests/test_api.py. Bridge tests 42 → 53
+  (1 live-test skipif unchanged).
 
 ### Next
-- V2 #4 SQLite conversation persistence (schema already in place;
-  mainly need to surface device_id on hello and backfill 1-to-1
-  device↔session indexing).
 - V2 #5 admin console wired to /api/* (replace mock fetches in
   web/src/pages/* with real fetch('/api/...') calls).
 - V2 #1 real ASR / V2 #2 real TTS (deprioritized until #5 ships, so
   the conversations UI shows real data first).
 - V2 #6 multi-device, V2 #7 reverse MCP, V2 #8 OTA, V2 #9 MQTT,
   V2 #10 voiceprint, V2 #11 RAG, V2 #12 monitoring/alerting/backup.
+
+## [0.2.1] - 2026-06-03
+
+### V2 #4 SQLite conversation persistence
+
+把 v0.2.0 遗漏的 device association 补上：之前 firmware 不发
+`Device-Id` header 时 `open_session` 跳过了 `upsert_device`，
+`/api/devices` 永远显示 `[]`、conversations 的 `device_id` 永远是
+空字符串。V2 #4 改用 synthetic `"unknown"` 桶来收容“匿名”会话，
+让这种“ 失联设备”能 可见且可查。
+
+### Changed
+
+- `BridgeDB.upsert_device(device_id)` now accepts `None` and stores
+  it as `"unknown"`. This is so the devices row is always present
+  (it's the parent of conversations via FK, and the source of truth
+  for /api/devices).
+- `BridgeDB.open_session(device_id)` always calls `upsert_device`
+  now, regardless of whether device_id is truthy.
+
+### Added
+
+- New route `GET /api/devices/{device_id}/conversations?limit=50`.
+  Returns the same shape as `GET /api/conversations?deviceId=...`
+  but scoped to a single device. `?limit` clamps to [1, 500].
+- `tests/test_db.py` — 8 direct BridgeDB unit tests, including the
+  "open_session without device_id still creates a device row"
+  contract and "device_id is None on a conversation is stored as
+  deviceId='' in the API response".
+- 3 new tests in `tests/test_api.py` for the per-device
+  conversations route (empty, seeded, limit).
+
+### Cleaned up
+
+- `config/config.yaml` (live, gitignored): removed `device.echo_mode`
+  (V1 cleanup deleted the code but left the dead yaml key) and
+  `mcp.enabled` / `mcp.auto_initialize` (V1 cleanup had already
+  moved mcp config into code; the yaml keys were dead). The
+  yaml-stable `mcp: {}` placeholder from V1 cleanup is kept.
+
+## [0.2.0] - 2026-06-03
 
 ## [0.2.0] - 2026-06-03
 
