@@ -49,16 +49,36 @@ log = logging.getLogger(__name__)
 
 
 def _get_header(ws: WebSocketServerProtocol, name: str, default: str | None = None) -> str | None:
-    """Read a header from a WebSocket connection, supporting both
-    websockets.legacy (ws.request_headers) and websockets ≥14 (ws.handshake.headers).
+    """Read a header from a WebSocket connection, supporting the three
+    websockets API surfaces that have shipped:
+
+    - websockets < 14 / legacy:    ``ws.request_headers``
+    - websockets 14-15:           ``ws.handshake.headers`` (property
+                                  that returned the parsed Request)
+    - websockets 16+:             ``ws.request.headers`` (Request is
+                                  a regular attribute, ``handshake`` is
+                                  a method that performs the upgrade).
+
+    We need all three because pyproject only pins ``websockets>=13.0``,
+    and the API broke twice in the 14/16 majors. Tested live on 16.0
+    in V2 #4 after the V2 #3 e2e missed the bug (it had ``device_id``
+    silently fall to None because no path matched the new API).
     """
-    # Legacy API (websockets < 14, used by pyproject's loose dep)
-    if hasattr(ws, "request_headers"):
-        return ws.request_headers.get(name, default)
-    # New API
+    # Legacy: < 14
+    rh = getattr(ws, "request_headers", None)
+    if rh is not None:
+        return rh.get(name, default)
+    # websockets 16+: request is a plain attribute
+    req = getattr(ws, "request", None)
+    if req is not None and getattr(req, "headers", None) is not None:
+        return req.headers.get(name, default)
+    # websockets 14-15: handshake is a property returning the Request
     hs = getattr(ws, "handshake", None)
-    if hs is not None and getattr(hs, "headers", None) is not None:
-        # websockets.http.Headers is a dict-like with .get
+    if (
+        hs is not None
+        and not callable(hs)
+        and getattr(hs, "headers", None) is not None
+    ):
         return hs.headers.get(name, default)
     return default
 

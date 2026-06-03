@@ -163,3 +163,78 @@ async def test_full_turn_pipeline(monkeypatch, app_config):
             assert len(binary_frames) > 0, "no TTS audio frames received"
     finally:
         await server.stop()
+
+
+# --- V2 #4: _get_header covers all three websockets API surfaces ---
+
+
+class _LegacyWS:
+    """websockets < 14 surface: ws.request_headers is a http.Headers."""
+
+    def __init__(self, headers: dict[str, str]) -> None:
+        # Mimic websockets ≥ 13.0 legacy http.Headers by storing the
+        # raw mapping; _get_header only needs .get(name, default).
+        self.request_headers = type("H", (), {"get": lambda self, k, d=None: headers.get(k, d)})()
+
+
+class _WS15WS:
+    """websockets 14-15 surface: ws.handshake is a property returning Request."""
+
+    def __init__(self, headers: dict[str, str]) -> None:
+        h = type("H", (), {"get": lambda self, k, d=None: headers.get(k, d)})()
+        # The 14-15 surface stored the parsed request under .handshake
+        # as a *property*; it returned the Request dataclass instance.
+        # Crucially: ws.handshake is NOT callable in that version.
+        self.handshake = type("Req", (), {"headers": h})()
+
+
+class _WS16WS:
+    """websockets 16+ surface: ws.request is the Request; ws.handshake is a method."""
+
+    def __init__(self, headers: dict[str, str]) -> None:
+        h = type("H", (), {"get": lambda self, k, d=None: headers.get(k, d)})()
+        self.request = type("Req", (), {"headers": h})()
+
+        async def _handshake_method(*args, **kwargs):
+            raise RuntimeError("called _get_header on a method, not a property")
+
+        self.handshake = _handshake_method
+
+
+def test_get_header_legacy() -> None:
+    from xiaozhi_bridge.server import _get_header
+
+    ws = _LegacyWS({"Device-Id": "esp32-001"})
+    assert _get_header(ws, "Device-Id") == "esp32-001"
+    assert _get_header(ws, "Authorization") is None
+    assert _get_header(ws, "Authorization", "fallback") == "fallback"
+
+
+def test_get_header_ws15() -> None:
+    from xiaozhi_bridge.server import _get_header
+
+    ws = _WS15WS({"Device-Id": "esp32-002"})
+    assert _get_header(ws, "Device-Id") == "esp32-002"
+
+
+def test_get_header_ws16() -> None:
+    """V2 #4 regression: in 16.0, ws.handshake is a method, not a property
+    holding the Request. Falling for the callable test was the V2 #3
+    bug — server kept reading device_id=None even when the client
+    sent Device-Id."""
+    from xiaozhi_bridge.server import _get_header
+
+    ws = _WS16WS({"Device-Id": "esp32-003"})
+    assert _get_header(ws, "Device-Id") == "esp32-003"
+
+
+def test_get_header_missing() -> None:
+    """If none of the three surfaces are present (shouldn't happen
+    with websockets >= 13.0, but defensive), we return the default."""
+    from xiaozhi_bridge.server import _get_header
+
+    class _Empty:
+        pass
+
+    assert _get_header(_Empty(), "Device-Id") is None
+    assert _get_header(_Empty(), "Device-Id", "x") == "x"
