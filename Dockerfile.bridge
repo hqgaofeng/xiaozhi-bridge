@@ -1,0 +1,76 @@
+# xiaozhi-bridge Dockerfile
+#
+# Multi-stage build for the Python bridge service.
+# Based on python:3.12-slim for a small footprint.
+
+# ============================================================
+# Stage 1: builder — install dependencies into a venv
+# ============================================================
+FROM python:3.12-slim AS builder
+
+# System dependencies for building
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libopus0 libopus-dev \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package manager)
+RUN pip install --no-cache-dir uv
+
+# Set up working directory
+WORKDIR /app
+
+# Copy dependency files first for better layer caching
+COPY bridge/pyproject.toml bridge/README.md ./
+
+# Create venv and install deps
+RUN uv venv /app/.venv && \
+    uv pip install --python /app/.venv/bin/python ".[dev]"
+
+# Copy source
+COPY bridge/src ./src
+COPY bridge/tests ./tests
+COPY bridge/conftest.py ./
+
+# ============================================================
+# Stage 2: runtime — minimal image with venv
+# ============================================================
+FROM python:3.12-slim AS runtime
+
+# Runtime system deps (no compilers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libopus0 \
+        ffmpeg \
+        tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r app && useradd -r -g app app
+
+# Copy venv from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/tests /app/tests
+COPY --from=builder /app/conftest.py /app/conftest.py
+COPY --from=builder /app/pyproject.toml /app/pyproject.toml
+
+# Set up paths
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
+ENV PYTHONUNBUFFERED=1
+ENV XIAOZHI_LOGGING__FORMAT=json
+
+# Working dir
+WORKDIR /app
+
+# Switch to non-root
+USER app
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import socket; s = socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 8000)); s.close()" || exit 1
+
+# tini handles signals properly
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Default command
+CMD ["python", "-m", "xiaozhi_bridge", "--config", "/app/config.yaml"]

@@ -1,0 +1,62 @@
+# Files / dirs to exclude from Docker build context
+# Speeds up builds by not sending unnecessary files
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# CI / IDE
+.github
+.vscode
+.idea
+*.swp
+*.swo
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+web/dist/
+web/.vite/
+web/.env
+web/.env.local
+web/.env.production
+web/coverage/
+
+# Logs / runtime
+*.log
+logs/
+.pid
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.Trash-*
+
+# Secrets (should be in env / vault, not in repo)
+config/config.yaml
+config/secrets.yaml
+config/*.local.yaml
+.env
+.env.local
+.env.production
+*.key
+*.pem
+*.crt

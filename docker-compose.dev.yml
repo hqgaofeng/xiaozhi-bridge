@@ -1,0 +1,46 @@
+# xiaozhi-bridge development override
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Differences from production:
+#   - Builds from local source (no cache busting)
+#   - Mounts source for live reload
+#   - Exposes debug ports
+#   - Lower memory limits for development
+
+name: xiaozhi-bridge-dev
+
+services:
+  bridge:
+    build:
+      target: builder
+    command: >
+      watchmedo auto-restart --directory=/app/src --pattern=*.py --recursive --
+      python -m xiaozhi_bridge --config /app/config.yaml --log-level DEBUG
+    volumes:
+      - ./bridge/src:/app/src:ro
+      - ./config:/app/config:ro
+    environment:
+      - XIAOZHI_LOGGING__LEVEL=DEBUG
+      - XIAOZHI_LOGGING__FORMAT=console
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # debugpy
+    mem_limit: 400m
+
+  web:
+    build:
+      target: builder
+    command: pnpm dev --host 0.0.0.0
+    volumes:
+      - ./web/src:/app/src:ro
+      - ./web/public:/app/public:ro
+      - ./web/index.html:/app/index.html:ro
+      - ./web/vite.config.ts:/app/vite.config.ts:ro
+    ports:
+      - "3000:3000"  # Vite dev server
+
+  caddy:
+    # In dev, use a permissive Caddyfile without HTTPS
+    volumes:
+      - ./deploy/Caddyfile.dev:/etc/caddy/Caddyfile:ro

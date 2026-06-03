@@ -1,0 +1,127 @@
+# xiaozhi-bridge Docker Compose
+#
+# Single-host deployment for all three services:
+#   - openclaw    (LLM gateway, uses external image)
+#   - bridge      (Python WebSocket bridge, built from Dockerfile.bridge)
+#   - web         (React admin console, built from Dockerfile.web)
+#   - caddy       (Reverse proxy + automatic HTTPS)
+#
+# Usage:
+#   docker compose up -d           # start everything
+#   docker compose down            # stop everything
+#   docker compose logs -f bridge  # follow bridge logs
+#   docker compose restart bridge  # restart one service
+#
+# First time:
+#   1. Copy .env.example to .env and fill in values
+#   2. Edit Caddy config in deploy/Caddyfile (change YOUR_DOMAIN)
+#   3. docker compose up -d
+
+name: xiaozhi-bridge
+
+services:
+  # ============================================================
+  # OpenClaw gateway (LLM runtime)
+  # ============================================================
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: xiaozhi-openclaw
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18789:18789"
+    volumes:
+      - openclaw-data:/root/.openclaw
+      - ./config/openclaw.json:/root/.openclaw/openclaw.json:ro
+    environment:
+      - OPENCLAW_GATEWAY_PORT=18789
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:18789/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - xiaozhi-net
+    mem_limit: 800m  # openclaw 自身吃得多
+
+  # ============================================================
+  # Python bridge (WebSocket + protocol layer)
+  # ============================================================
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: xiaozhi-bridge
+    restart: unless-stopped
+    depends_on:
+      openclaw:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - bridge-data:/app/data
+      - ./config/config.yaml:/app/config.yaml:ro
+      # 可选：挂载日志到宿主机
+      - ./logs/bridge:/var/log/xiaozhi-bridge
+    environment:
+      - XIAOZHI_OPENCLAW__BASE_URL=http://openclaw:18789
+      - XIAOZHI_LOGGING__LEVEL=${LOG_LEVEL:-INFO}
+      - XIAOZHI_LOGGING__FORMAT=json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 8000)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - xiaozhi-net
+    mem_limit: 200m  # bridge 本身很轻
+
+  # ============================================================
+  # Web admin console (static SPA)
+  # ============================================================
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: xiaozhi-web
+    restart: unless-stopped
+    depends_on:
+      - bridge
+    expose:
+      - "80"  # only internal, behind caddy
+    networks:
+      - xiaozhi-net
+    mem_limit: 50m
+
+  # ============================================================
+  # Caddy reverse proxy (HTTPS termination)
+  # ============================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: xiaozhi-caddy
+    restart: unless-stopped
+    depends_on:
+      - bridge
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - xiaozhi-net
+    mem_limit: 100m
+
+volumes:
+  openclaw-data:
+  bridge-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  xiaozhi-net:
+    driver: bridge

@@ -1,0 +1,27 @@
+[Unit]
+Description=xiaozhi-bridge - WebSocket bridge for xiaozhi-esp32 devices
+Documentation=https://github.com/yourusername/xiaozhi-bridge
+After=network.target openclaw-gateway.service
+Wants=openclaw-gateway.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/projects/xiaozhi-bridge/bridge
+Environment="PATH=/root/projects/xiaozhi-bridge/bridge/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="XIAOZHI_LOGGING__LEVEL=INFO"
+ExecStart=/root/projects/xiaozhi-bridge/bridge/.venv/bin/python -m xiaozhi_bridge --config /root/projects/xiaozhi-bridge/config/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/xiaozhi-bridge/bridge.log
+StandardError=append:/var/log/xiaozhi-bridge/bridge.err
+
+# Hardening (adjust as needed)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/log/xiaozhi-bridge /root/projects/xiaozhi-bridge
+
+[Install]
+WantedBy=multi-user.target

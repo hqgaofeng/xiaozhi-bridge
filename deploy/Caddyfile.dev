@@ -1,0 +1,15 @@
+# Caddy config for local development
+# No HTTPS, no domain required.
+
+:8080 {
+    encode gzip
+
+    # Web admin UI (Vite dev server)
+    reverse_proxy web:3000
+
+    # Bridge HTTP API
+    reverse_proxy /api/* bridge:8000
+
+    # Bridge WebSocket
+    reverse_proxy /xiaozhi/* bridge:8000
+}

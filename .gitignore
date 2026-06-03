@@ -1,0 +1,48 @@
+# --- Python (bridge) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Config with secrets
+config/config.yaml
+config/*.local.yaml
+config/secrets.yaml
+
+# --- Node (web) ---
+node_modules/
+web/dist/
+web/.vite/
+web/.env
+web/.env.local
+web/.env.production
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# OS
+.Trash-*
+
+# Generated
+*.bak
+*.tmp

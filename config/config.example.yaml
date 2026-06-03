@@ -1,0 +1,76 @@
+# xiaozhi-bridge configuration example
+#
+# Copy this file to config.yaml and edit before running.
+# All sections are optional; sensible defaults are used if omitted.
+
+# WebSocket server
+server:
+  host: 0.0.0.0
+  port: 8000
+  # Path prefix (xiaozhi-esp32 firmware usually expects /xiaozhi/v1/)
+  path: /xiaozhi/v1/
+  # WebSocket max message size in bytes (10 MB)
+  max_message_size: 10485760
+  # CORS origins for the web admin UI
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:5173
+
+# OpenClaw gateway (the LLM brain)
+openclaw:
+  base_url: http://127.0.0.1:18789
+  api_key: ""  # usually empty; openclaw uses its own auth profile
+  # Which model to use
+  model: minimax/MiniMax-M3
+  # Use streaming responses (recommended)
+  stream: true
+  max_tokens: 4096
+  temperature: 0.7
+  timeout: 60.0
+
+# ASR provider (pluggable)
+# V1 supports: mock
+# Add more by implementing asr/<name>.py and registering it
+asr:
+  provider: mock
+  options:
+    # Mock-specific config — ignored by other providers
+    mode: random         # "random" | "fixed"
+    # text: "你好小智"   # used if mode=fixed
+    # phrases:            # used if mode=random
+    #   - "今天天气怎么样"
+    #   - "把灯打开"
+    latency_ms: 100
+
+# TTS provider (pluggable)
+# V1 supports: mock
+tts:
+  provider: mock
+  voice: zh-CN-XiaoxiaoNeural
+  rate: "+0%"
+  volume: "+0%"
+  options:
+    # Mock-specific config
+    mode: silence        # "silence" | "tone"
+    chunk_ms: 60
+
+# Device / session
+device:
+  # Optional bearer token for device Authorization header
+  # If empty, no auth check
+  auth_token: ""
+  session_id_prefix: xiaozhi
+  # Echo mode: just echo STT text back (testing)
+  echo_mode: false
+
+# MCP / IoT
+mcp:
+  enabled: true
+  # Auto-send initialize request after device hello
+  auto_initialize: true
+
+# Logging
+logging:
+  level: INFO
+  format: console       # "console" | "json"
+  file: null            # e.g. "/var/log/xiaozhi-bridge.log"
