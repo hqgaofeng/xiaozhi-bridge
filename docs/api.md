@@ -153,5 +153,7 @@ bridge-api 跟 bridge WS **不共享内存**。两者都是独立 uvicorn 进程
 ## V1 状态
 
 V1 **没有 HTTP API**，仅 WebSocket。智控台（web/）V1 全部是 mock 数据。
-V2 #3 解锁了 “接真数据” 路径；V2 #5 任务是把 web 里的 mock fetch 换成
-对 /api/* 的真 fetch。
+V2 #3 解锁了 “接真数据” 路径；V2 #5 (web 0.2.0) 是真正的实现：5 个
+page 全部从 hardcoded mock 改为 fetch /api/*，新增 useApi<T>() hook。
+修了一个隐藏 bug：Vite dev proxy /api 之前指向 bridge WS 进程 (8000)，
+现在指向 bridge-api (8001)。

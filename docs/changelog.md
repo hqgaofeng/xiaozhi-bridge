@@ -24,14 +24,80 @@
   `ws.handshake` is a method (not a property); new
   `scripts/e2e_smoke.py` is a 5-case live e2e harness.
   Bridge tests 53 → 57.
+- V2 #5 admin console wired to /api/* (web 0.2.0): all 5 page
+  components (Dashboard / Devices / Conversations / IoT /
+  Settings) now fetch real data from bridge-api instead of
+  hardcoded mocks. New `useApi<T>()` hook for uniform
+  loading / error / refresh state; per-page error blocks
+  instead of blanking the whole screen on one bad endpoint;
+  per-device drill-down from the Devices page; K-V editor
+  for /api/config; IoT devices show live on/off state with
+  optimistic controls. Vite dev proxy target fixed
+  (was pointed at bridge WS on 8000, now points at
+  bridge-api on 8001). Type-check 0 errors; production
+  build 0 errors. Logs page kept as V1 mock (server
+  /api/logs/stream is still 501). Released as
+  `[0.2.0-web]`.
 
 ### Next
-- V2 #5 admin console wired to /api/* (replace mock fetches in
-  web/src/pages/* with real fetch('/api/...') calls).
-- V2 #1 real ASR / V2 #2 real TTS (deprioritized until #5 ships, so
-  the conversations UI shows real data first).
+- V2 #1 real ASR / V2 #2 real TTS (the V2 #5 admin console
+  is now in place, so the real-time ASR/TTS swap can target
+  a UI that already shows real conversations).
 - V2 #6 multi-device, V2 #7 reverse MCP, V2 #8 OTA, V2 #9 MQTT,
   V2 #10 voiceprint, V2 #11 RAG, V2 #12 monitoring/alerting/backup.
+
+## [0.2.0-web] - 2026-06-03
+
+### V2 #5 admin console wired to /api/* (web 0.2.0)
+
+这是 web 0.2.0（web 独立 semver；bridge 仍是 0.2.1）。
+V2 #3 解锁了“接真数据”路径，V2 #5 是真正的实现：在 5 个
+page 上把 hardcoded mock 全部替换为从 bridge-api fetch 的真数据。
+
+### Added
+
+- `web/src/lib/useApi.ts` — 泛型数据获取 hook。提供
+  `{ data, error, loading, refresh }` 四个状态，避免每个 page
+  重复 useEffect/useState。挂载时拉一次，`refresh()` 手动重
+  拉，组件卸载时取消 in-flight 请求。
+
+- 5 个 page 全部接真数据：
+  - **Dashboard** — 4 个 stat 卡 从 /api/devices (在线数) +
+    /api/conversations (最近 100 条数) + /api/iot (在线数)
+    拿真数。
+  - **Devices** — 列表接 /api/devices；点任一设备跳转
+    /api/devices/{id}/conversations 查看该设备历史。
+  - **Conversations** — 接 /api/conversations，加
+    `?deviceId=...` 过滤。带搜索框 client-side filter
+    (按文本)。
+  - **IoT** — 接 /api/iot + /api/iot/{id}/control POST，
+    翻状态后 refresh。
+  - **Settings** — 接 /api/config GET + PATCH，K-V 编辑器
+    (任意 JSON 兼容 key/value，保存后发 PATCH 覆盖)。
+
+### Changed
+
+- **Vite dev proxy** (`web/vite.config.ts`) `/api` target 从
+  127.0.0.1:8000 (bridge WS) 改为 127.0.0.1:8001
+  (bridge-api)。之前的配置是错的——bridge WS 进程不接
+  HTTP GET，只是巧合性不会让 8000 响应 /api。
+  `/xiaozhi` 仍走 8000 (WebSocket upgrade)。
+- `web/src/lib/api.ts` Conversation interface 补 sessionId、
+  llmStatus 字段（之前漏了，跟 server 端 schema 不一致）。
+  controlIot 签名收紧为 `{ action: 'on'\|'off'; value? }`
+  object 参数（之前是 positional，调用容易错位）。
+- `web/package.json` version 0.1.0 → 0.2.0。
+
+### Known gaps (V2 #6+ follow-ups)
+
+- **Logs page** 仍是 V1 `setInterval` 假流。server 端
+  /api/logs/stream 仍是 501/SSE 椎，留给 V2 #6。
+- 没有 SWR / react-query 缓存，5 page 各自 fetch。够用但不
+  高效。V2 #6 上 react-query。
+- WebSocket 实时推送 (设备 online 状态、实时对话推送) 还没
+  接。V2 #6 加 @tanstack/react-query + ws hook。
+
+
 
 ## [0.2.1] - 2026-06-03
 

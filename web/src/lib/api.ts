@@ -19,9 +19,11 @@ export interface Device {
 export interface Conversation {
   id: string
   deviceId: string
+  sessionId?: string
   startedAt: string
   endedAt?: string
   turns: ConversationTurn[]
+  llmStatus?: 'ok' | 'error' | 'fallback'
 }
 
 export interface ConversationTurn {
@@ -79,10 +81,10 @@ export const api = {
 
   // --- IoT ---
   listIotDevices: () => request<IotDevice[]>('/iot'),
-  controlIot: (id: string, action: string, value?: unknown) =>
+  controlIot: (id: string, body: { action: 'on' | 'off'; value?: unknown }) =>
     request<IotDevice>(`/iot/${id}/control`, {
       method: 'POST',
-      body: JSON.stringify({ action, value }),
+      body: JSON.stringify(body),
     }),
 
   // --- Settings ---

@@ -2,7 +2,7 @@
 
 > 本文档描述 xiaozhi-bridge 的系统架构、模块划分、数据流和设计决策。
 >
-> **V1 + V2 #3 + V2 #4 现状（2026-06-03）**：bridge 调 openclaw agent 端点（OpenAI 协议）、bridge-api 独立进程提供 HTTP API、两者通过 sqlite + WAL 交换状态。V2 #4 补上了 device association：firmware 忘发 `Device-Id` header 的会话不再“ 丢”，会被收到 `unknown` 设备桶里。服务跑在 VPS 上，公网地址 `https://jarvis.beallen.top`。
+> **V1 + V2 #3 + V2 #4 + V2 #5 现状（2026-06-03）**：bridge 调 openclaw agent 端点（OpenAI 协议）、bridge-api 独立进程提供 HTTP API、两者通过 sqlite + WAL 交换状态。V2 #4 补上了 device association：firmware 忘发 `Device-Id` header 的会话不再“ 丢”，会被收到 `unknown` 设备桶里。**V2 #5** 是 web 0.2.0：智控台 5 个 page 全部 fetch /api/* 真数据，dashboard/device/conversation/IoT/settings 都从 mock 切到 live。服务跑在 VPS 上，公网地址 `https://jarvis.beallen.top`。
 >
 > 详细版本变更：[changelog.md](changelog.md)。V1 发布说明：[v1-release-notes.md](v1-release-notes.md)。
 

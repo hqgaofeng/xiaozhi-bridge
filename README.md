@@ -17,6 +17,7 @@
 ✅ **V1 已发布**（v0.1.2 → v0.1.5，2026-06-03） — 详见 [docs/v1-release-notes.md](docs/v1-release-notes.md)
 ✅ **V2 #3 已发布**（v0.2.0，2026-06-03） — FastAPI HTTP API（bridge-api 独立进程，11 个 /api/* 端点，aiosqlite + WAL）
 ✅ **V2 #4 已发布**（v0.2.1，2026-06-03） — device association：`upsert_device` 接受 `None` 转到 `unknown` 桶；新增 `GET /api/devices/{id}/conversations`；11 个新单测。
+✅ **V2 #5 已发布**（web 0.2.0，2026-06-03） — 智控台接真数据：5 个 page 全部从 hardcoded mock 改 为 fetch /api/*，新增 `useApi<T>()` hook + 修 Vite dev proxy target（8000→8001）。
 
 **端到端跑通**：
 - WebSocket：从公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 连上 xiaozhi-esp32 协议，走 bridge → openclaw → MiniMax-M3，返回中文实际响应（120+ Opus 帧）。
@@ -167,7 +168,7 @@ xiaozhi-bridge/
 │   └── tests/                  # 57 个测试（27 V1 + 15 V2 #3 + 15 V2 #4，含 _get_header）
 ├── scripts/                    # 运维工具
 │   └── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
-├── web/                        # React 智控台（V1 mock，V2 #5 接 /api/*）
+├── web/                        # React 智控台（V2 #5 接 /api/*，web 0.2.0）
 │   ├── package.json
 │   ├── src/
 │   └── public/

@@ -13,9 +13,11 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      // Proxy API requests to the bridge service during dev
+      // V2 #5: /api/* goes to the bridge-api FastAPI process on 8001
+      // (the WS bridge on 8000 doesn't serve HTTP routes). /xiaozhi/*
+      // stays pointed at 8000 for the WebSocket upgrade.
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8001',
         changeOrigin: true,
       },
       '/xiaozhi': {
