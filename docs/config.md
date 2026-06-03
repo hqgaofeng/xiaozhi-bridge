@@ -102,18 +102,24 @@ tts:
 device:
   auth_token: ""         # 可选：设备的 Bearer token（留空 = 不校验）
   session_id_prefix: xiaozhi
-  echo_mode: false       # 调试用：回声模式
 ```
+
+> **V2 #4 起变化**：`device.echo_mode` 已删除（之前是
+> 调试用“原样回”模式，跟 LLM pipeline 不互通，V1 后期就
+> 没人用了）。 V2 #4 顺手删掉，配置文件中也不再有这个字段。
 
 ### mcp
 
 MCP 端点配置。
 
 ```yaml
-mcp:
-  enabled: true
-  auto_initialize: true  # 握手后自动发 initialize 请求
+mcp: {}
 ```
+
+> **V2 #4 起变化**：`mcp.enabled` 和 `mcp.auto_initialize`
+> 已删除。V1 后期决定不暴露 MCP（firmware 端的那路没起来，
+> 跟 V2 #7 “reverse MCP” 一起重做）。现在 `mcp` 段是个空占位
+> `{}` ，后续 V2 #7 会重新补上真正的 MCP 路由。
 
 ### logging
 
