@@ -48,7 +48,11 @@ jobs:
         # some runner environments and we don't track coverage
         # right now. Tests still assert the contract; coverage
         # is for human-driven audits locally.
-        run: uv run --no-sync pytest tests/ -v
+        run: |
+          set -e
+          uv run --no-sync pytest tests/ -v 2>&1 | tee /tmp/pytest.log
+          echo "--- pytest log above ---"
+          cat /tmp/pytest.log | tail -80
 
       # Coverage upload is disabled — we don't have a Codecov
       # token configured and the public uploader is rate-limited
@@ -90,8 +94,12 @@ jobs:
         # doesn't have them so vite.config is "missing" in
         # some environments).
         run: |
+          set -e
           rm -f tsconfig*.tsbuildinfo vite.config.d.ts vite.config.js
-          pnpm build
+          ls -la
+          pnpm build 2>&1 | tee /tmp/build.log
+          echo "--- build log above ---"
+          cat /tmp/build.log | tail -50
 
   # --- Docker build sanity check ---
   docker-build:
