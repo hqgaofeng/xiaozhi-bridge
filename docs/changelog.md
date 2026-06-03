@@ -4,7 +4,16 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased] - V1 开发中
+## [Unreleased]
+
+## [0.1.3] - 2026-06-03
+
+### Added
+- **`docs/v1-release-notes.md`**：V1 完成清单 + 端到端验证证据（120+ Opus 帧、M3 真返回中文、带会话隔离）。逐项列出 V1 已实现的 8 大模块、12 个 V2 TODO。
+
+### Changed
+- **`README.md` 状态从 “V1 开发中” 改为 “V1 已发布 (v0.1.2)”**，加 demo 地址 https://jarvis.beallen.top；特性加 “公网 HTTPS” + “28 测试含 live test” + “隔离会话”。
+- **`README.md` 快速开始 §2-5 修订**：删 Caddy 步骤、改成 “宿主 openclaw 改 bind + 宿主 nginx 签证书” 两件，WebSocket 和智控台 demo 地址改到 jarvis.beallen.top / 5180。
 
 ## [0.1.2] - 2026-06-03
 

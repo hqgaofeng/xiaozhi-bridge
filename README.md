@@ -14,18 +14,26 @@
 
 ## 项目状态
 
-🚧 **V1 开发中** — 详见 [docs/changelog.md](docs/changelog.md)
+✅ **V1 已发布**（v0.1.2，2026-06-03） — 详见 [docs/v1-release-notes.md](docs/v1-release-notes.md)
+
+**端到端跑通**：从公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 连上 xiaozhi-esp32 协议，走 bridge → openclaw → MiniMax-M3，返回中文实际响应（120+ Opus 帧）。
+
+**V1 包含**：WebSocket 协议 / LLM 桥接 / MCP 工具 / Mock ASR+TTS / React 智控台 / Docker Compose / 域名 HTTPS（jarvis.beallen.top）。
+
+**V2 TODO 列表**（12 项）：真实 ASR / 真实 TTS / FastAPI HTTP API / 对话持久化 / Web 接真数据 / 多设备 / 反向 MCP / OTA / MQTT / 声纹 / RAG。
 
 ## ✨ 特性
 
-- 🐳 **Docker Compose 一键部署** — 3 个服务（openclaw + bridge + web）+ Caddy 反代
+- 🐳 **Docker Compose 一键部署** — 2 个服务（bridge + web）+ 宿主 nginx + Let's Encrypt
 - 🪶 **轻量** — 1G 内存 + 1G swap 凑合可跑
 - 🔌 **可插拔** — ASR / TTS / LLM 都抽象成接口，配置文件切换 provider
 - 🤖 **M3 大脑** — 走 openclaw + MiniMax M3，1M context，工具调用
 - 📡 **完整协议** — xiaozhi WebSocket + MCP JSON-RPC 2.0
-- 🎨 **现代智控台** — React 18 + TypeScript + Tailwind + shadcn/ui 风格
-- 🧪 **26 个测试** — 全绿 ✅
-- 📚 **6 个详细文档** — 架构/协议/API/部署/配置/日志
+- 🎨 **现代智控台** — React 19 + TypeScript + Tailwind + shadcn/ui 风格
+- 🧪 **28 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test）
+- 📚 **7 个详细文档** — 架构/协议/API/部署/配置/日志/V1 发布说明
+- 🔒 **隔离会话** — `user: xiaozhi-bridge` 派生独立 session，不污染主会话
+- 🛡️ **真实部署** — `https://jarvis.beallen.top` 公网可访问
 
 ## 🏗️ 架构
 
@@ -74,21 +82,23 @@ cd xiaozhi-bridge
 
 # 2. 配置
 cp .env.example .env
-# 编辑 .env 填入 MINIMAX_API_KEY 等
+# 编辑 .env 填入 LOG_LEVEL 等
 
 cp config/config.example.yaml config/config.yaml
 # 编辑 config/config.yaml
+# ⚠️ openclaw.base_url 默认是 http://host.docker.internal:18789
+#    （bridge 容器调宿主上的 openclaw，宿主 openclaw 必须 bind 到 0.0.0.0）
+#    openclaw api_key 从宿主的 ~/.openclaw/openclaw.json 里 gateway.auth.token 拿
 
-# 3. 修改 Caddy 域名（生产）
-# 编辑 deploy/Caddyfile，把 YOUR_DOMAIN 改成你的域名
+# 3. 宿主上准备 openclaw（两件必做）
+# a) 在 ~/.openclaw/openclaw.json 的 gateway 下加：
+#      "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
+#      "bind": "lan"
+# b) 重启 openclaw gateway（systemctl --user restart openclaw-gateway）
+# c) 验证: ss -tlnp | grep 18789   → 应看到 0.0.0.0:18789
 
-# 4. **重要：开启 openclaw 的 chatCompletions endpoint**
-# openclaw 默认不暴露 /v1/chat/completions。编辑 openclaw 配置
-# （一般是 ~/.openclaw/openclaw.json），在 gateway 下加：
-#
-#   "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
-#
-# 然后重启 openclaw gateway（systemctl --user restart openclaw-gateway）。
+# 4. 宿主上准备 nginx + Let's Encrypt（生产）
+# 本项目不再起容器内 caddy。参考 docs/deployment-docker.md §2.4 添 nginx conf + 签证书
 
 # 5. 启动
 docker compose up -d
@@ -99,11 +109,11 @@ docker compose logs -f bridge
 
 **WebSocket 地址**：
 - 本地开发：`ws://localhost:8000/xiaozhi/v1/`
-- 生产（HTTPS）：`wss://your-domain.com/xiaozhi/v1/`
+- 生产（HTTPS）：`wss://jarvis.beallen.top/xiaozhi/v1/`（demo）
 
 **智控台**：
-- 本地开发：http://localhost:8080
-- 生产：https://your-domain.com
+- 本地开发：http://localhost:5180
+- 生产：https://jarvis.beallen.top（demo）
 
 ### 开发模式
 
