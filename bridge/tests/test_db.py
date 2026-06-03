@@ -136,14 +136,25 @@ async def test_list_conversations_filters_by_device(db: BridgeDB) -> None:
 
 async def test_record_conversation_null_device_is_stored(db: BridgeDB) -> None:
     """When firmware omits Device-Id, conversations still get saved
-    (just with deviceId=''). They're not lost."""
+    (under the synthetic "unknown" device_id, the same bucket
+    upsert_device writes to). They're not lost and the new
+    /api/devices/unknown/conversations route can find them.
+
+    The FK from conversations.device_id → devices.device_id means
+    we need the "unknown" row to exist first; in production the
+    bridge's open_session() does this for us. Here we call
+    open_session() to mirror the real flow.
+    """
+    await db.open_session("sess-1", device_id=None)
     cid = await db.record_conversation(
         device_id=None, session_id="sess-1", stt_text="x", assistant_text="y"
     )
     assert cid > 0
     convos = await db.list_conversations()
     assert len(convos) == 1
-    # The API serializes None device_id as "" so JS clients don't trip
-    # on null (this is the same behavior the bridge already shows for
-    # the V2 #3 e2e records).
-    assert convos[0]["deviceId"] == ""
+    # record_conversation applies the same effective_id rule as
+    # upsert_device: None → "unknown" so the row is queryable.
+    assert convos[0]["deviceId"] == "unknown"
+    # And the unknown bucket is queryable.
+    unknown_convos = await db.list_conversations(device_id="unknown")
+    assert len(unknown_convos) == 1

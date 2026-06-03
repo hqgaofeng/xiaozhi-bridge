@@ -254,13 +254,18 @@ class BridgeDB:
         assistant_text: str,
         llm_status: str = "ok",
     ) -> int:
+        # V2 #4: same unknown-bucket rule as upsert_device — if the
+        # firmware forgot the Device-Id header, the conversation row
+        # should still be findable via /api/devices/unknown/conversations
+        # (the synthetic bucket id), not lost under device_id=NULL.
+        effective_device_id = device_id or "unknown"
         assert self._conn is not None
         now = time.time()
         async with self._conn.execute(
             "INSERT INTO conversations(device_id, session_id, started_at, ended_at, "
             "stt_text, assistant_text, llm_status) "
             "VALUES(?, ?, ?, ?, ?, ?, ?)",
-            (device_id, session_id, now, now, stt_text, assistant_text, llm_status),
+            (effective_device_id, session_id, now, now, stt_text, assistant_text, llm_status),
         ) as cur:
             cid = cur.lastrowid
         await self._conn.commit()
