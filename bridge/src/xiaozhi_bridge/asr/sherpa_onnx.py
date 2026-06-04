@@ -48,7 +48,6 @@ Pitfalls we hit during V2 #1 development (and now document):
 
 from __future__ import annotations
 
-import logging
 import struct
 import time
 from pathlib import Path
