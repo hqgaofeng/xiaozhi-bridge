@@ -18,7 +18,11 @@ export interface Device {
   notes?: string
   room?: string
   state: 'idle' | 'listening' | 'thinking' | 'speaking' | 'offline'
-  lastSeen: string
+  // V2 #6.3: the API returns unix seconds (REAL in SQLite),
+  // not ISO strings. The previous `string` type was a lie that
+  // crashed the Devices page on render (TypeError: t.getTime is
+  // not a function). Coercion lives in lib/utils.ts#toDate.
+  lastSeen: number
   sessionId?: string
 }
 
@@ -33,8 +37,9 @@ export interface Conversation {
   id: string
   deviceId: string
   sessionId?: string
-  startedAt: string
-  endedAt?: string
+  // V2 #6.3: unix seconds, not ISO strings (see Device.lastSeen).
+  startedAt: number
+  endedAt?: number
   turns: ConversationTurn[]
   llmStatus?: 'ok' | 'error' | 'fallback'
 }
@@ -42,7 +47,8 @@ export interface Conversation {
 export interface ConversationTurn {
   role: 'user' | 'assistant'
   text: string
-  timestamp: string
+  // V2 #6.3: unix seconds.
+  timestamp: number
   toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }>
 }
 
