@@ -149,3 +149,128 @@ async def test_asr_sherpa_onnx_transcribe_raises_when_model_dir_missing():
     asr = get_asr("sherpa_onnx", options={"model_dir": "/no/such/dir/please"})
     with pytest.raises(ASRError, match="does not exist"):
         await asr.transcribe(b"\x00\x00" * 100, sample_rate=16000)
+
+
+# --- V2 #1 (2026-06-04): sherpa-onnx end-to-end smoke (requires model) ---
+#
+# These tests load the real sherpa-onnx model and run actual inference on
+# the bundled test_wavs. They are SKIPPED unless:
+#   - /opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+#     exists (production layout), OR
+#   - XIAOZHI_TEST_MODEL_DIR env var points to a valid model dir
+#
+# In CI, these tests skip (no model available). Locally, Allen runs them.
+# The model is NOT committed to the repo (~500MB).
+
+
+import os
+import wave
+import struct
+from pathlib import Path
+
+_PROD_MODEL_DIR = Path(
+    "/opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+)
+
+
+def _resolve_test_model_dir():
+    """Return Path to a real model dir, or None to skip."""
+    env = os.environ.get("XIAOZHI_TEST_MODEL_DIR")
+    candidates = [Path(env)] if env else []
+    candidates.append(_PROD_MODEL_DIR)
+    for p in candidates:
+        if p and p.is_dir() and (p / "tokens.txt").is_file():
+            return p
+    return None
+
+
+_MODEL_DIR = _resolve_test_model_dir()
+_skip_no_model = pytest.mark.skipif(
+    _MODEL_DIR is None,
+    reason="sherpa-onnx model not available (set XIAOZHI_TEST_MODEL_DIR or install to /opt/xiaozhi-bridge/models/)",
+)
+_skip_no_sherpa = pytest.mark.skipif(
+    pytest.importorskip("sherpa_onnx", minversion="1.10") is None,
+    reason="sherpa-onnx>=1.10 not installed",
+)
+
+
+def _read_wav_int16(p: Path) -> tuple[bytes, int]:
+    """Read a 16-bit mono wav file, return (raw_int16_bytes, sample_rate)."""
+    with wave.open(str(p), "rb") as f:
+        sr = f.getframerate()
+        n = f.getnframes()
+        return f.readframes(n), sr
+
+
+@_skip_no_sherpa
+@_skip_no_model
+@pytest.mark.asyncio
+async def test_asr_sherpa_onnx_transcribes_test_wav_0():
+    """V2 #1: end-to-end on bundled test_wavs/0.wav (10s, zh+en mixed)."""
+    assert _MODEL_DIR is not None  # for type checker
+    wav = _MODEL_DIR / "test_wavs" / "0.wav"
+    audio, sr = _read_wav_int16(wav)
+    asr = get_asr("sherpa_onnx", options={"model_dir": str(_MODEL_DIR)})
+    result = await asr.transcribe(audio, sample_rate=sr)
+    # The bundled wav contains a Chinese+English mixed utterance
+    # ("昨天是星期三" / "today is the day after tomorrow"). We only assert
+    # non-empty (the exact text varies by audio decode + bpe subword).
+    assert result.text, f"expected non-empty transcription, got {result.text!r}"
+    assert result.language == "zh"
+
+
+@_skip_no_sherpa
+@_skip_no_model
+@pytest.mark.asyncio
+async def test_asr_sherpa_onnx_handles_empty_audio():
+    """V2 #1: empty audio returns empty text without raising."""
+    assert _MODEL_DIR is not None
+    asr = get_asr("sherpa_onnx", options={"model_dir": str(_MODEL_DIR)})
+    result = await asr.transcribe(b"", sample_rate=16000)
+    assert result.text == ""
+
+
+@_skip_no_sherpa
+@_skip_no_model
+@pytest.mark.asyncio
+async def test_asr_sherpa_onnx_handles_short_audio():
+    """V2 #1: very short audio (100ms of silence) returns text without error."""
+    assert _MODEL_DIR is not None
+    asr = get_asr("sherpa_onnx", options={"model_dir": str(_MODEL_DIR)})
+    # 100ms of silence at 16kHz int16 mono = 1600 samples = 3200 bytes
+    silence = b"\x00\x00" * 1600
+    result = await asr.transcribe(silence, sample_rate=16000)
+    # No assertion on text (could be empty or noise tokens), but must not raise.
+    assert isinstance(result.text, str)
+
+
+@_skip_no_sherpa
+@_skip_no_model
+@pytest.mark.asyncio
+async def test_asr_sherpa_onnx_rejects_stereo_in_real_path():
+    """V2 #1: stereo audio rejected (the skeleton test covers config;
+    this covers the runtime path with a real recognizer loaded)."""
+    assert _MODEL_DIR is not None
+    asr = get_asr("sherpa_onnx", options={"model_dir": str(_MODEL_DIR)})
+    # Force the recognizer to load (this is what we want to test the
+    # runtime path of — not just the config-validation guard).
+    asr._ensure_recognizer()
+    with pytest.raises(ASRError, match="mono"):
+        await asr.transcribe(b"\x00\x00" * 100, sample_rate=16000, channels=2)
+
+
+@_skip_no_sherpa
+@_skip_no_model
+@pytest.mark.asyncio
+async def test_asr_sherpa_onnx_resamples_8k_to_16k():
+    """V2 #1: 8kHz audio works (sherpa-onnx does resampling internally)."""
+    assert _MODEL_DIR is not None
+    wav = _MODEL_DIR / "test_wavs" / "8k.wav"
+    audio, sr = _read_wav_int16(wav)
+    assert sr == 8000
+    asr = get_asr("sherpa_onnx", options={"model_dir": str(_MODEL_DIR)})
+    result = await asr.transcribe(audio, sample_rate=sr)
+    # The 8k file has ~17s of Chinese speech. Even with bpe quirks the
+    # output should be non-empty.
+    assert result.text, f"expected non-empty text for 8k wav, got {result.text!r}"

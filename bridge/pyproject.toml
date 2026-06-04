@@ -32,14 +32,14 @@ dependencies = [
     "fastapi>=0.115",           # /api/* HTTP layer (V2 #3)
     "uvicorn[standard]>=0.30",  # ASGI server (V2 #3)
     "aiosqlite>=0.20",          # conversation persistence (V2 #3)
+    "sherpa-onnx>=1.10",        # local ASR (V2 #1) — streaming-zipformer-bilingual ONNX
 ]
 
 # --- Future (V2 / V3) dependencies (NOT installed yet) ---
 # Add when needed:
 #   "PyJWT>=2.9",             # auth tokens for /api/* (V2 #3 follow-up)
 #   "python-multipart>=0.0.9",# form parsing
-#   "edge-tts>=6.1",          # real TTS (V2 #2)
-#   "funasr-onnx>=0.3",       # local ASR (V2 #1) or sherpa-onnx / aliyun
+#   "edge-tts>=6.1",          # real TTS (V2 #2) — see tts/cloud.py
 #   "aiohttp>=3.10",          # only if you want a WS proxy inside /api/*
 
 [project.optional-dependencies]
