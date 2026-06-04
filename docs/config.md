@@ -66,17 +66,46 @@ openclaw:
 
 ASR provider 配置（可插拔）。
 
+可选 provider（v0.2.2）：
+
+| 名称 | 说明 | 状态 |
+|---|---|---|
+| `mock` | 返固定/随机文本 | V1 |
+| `sherpa_onnx` | 本地 ONNX streaming Zipformer (双语 zh+en)，CPU 推理 | V2 #1（默认） |
+| `cloud` | 云 API 骨架（Aliyun/Tencent/iFlytek/Volcengine） | 未实现（V2 #X） |
+
 ```yaml
 asr:
-  provider: mock         # 当前：mock；可扩展：aliyun、tencent、xfyun
-  options:               # 各 provider 私有配置
-    # Mock 特定
-    mode: random         # random | fixed
-    text: "你好小智"     # fixed 模式返回的文本
-    phrases:             # random 模式的语料
+  provider: sherpa_onnx   # v0.2.2 起默认；改 "mock" 走虚抑
+  options:
+    # sherpa_onnx 必填：模型目录
+    # 需含 tokens.txt + encoder/decoder/joiner .onnx（fp32 或 int8 都可）
+    # + bpe.vocab（bpe 训练的模型必需要）
+    model_dir: /opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+    # 可选（默认见括号）：
+    # num_threads: 2         # ONNX runtime 线程数
+    # decoding_method: greedy_search  # 或 modified_beam_search
+    # provider: cpu          # ONNX runtime provider（cuda 预留 V3+）
+    # modeling_unit: bpe     # 该模型是 bpe 训练，默认已为 bpe
+    # bpe_vocab: ...         # 不设则自动从 model_dir/bpe.vocab 读
+```
+
+> **V2 #1 资源预算**（VPS 1G RAM + 1G swap）：
+> - fp32 模型：加载 3.6s，稳态 ~150-200MB RSS，RTF ~0.43
+> - int8 模型：加载更快，RSS 更低，默认自动选 int8
+> - docker compose bridge 容器 mem_limit 已从 200m 调为 500m
+
+```yaml
+# 退路：虚抑 ASR（不加载模型，占位用）
+asr:
+  provider: mock
+  options:
+    mode: random
+    text: "你好小智"
+    phrases:
       - "今天天气怎么样"
       - "把灯打开"
-    latency_ms: 100      # 模拟 ASR 延迟
+    latency_ms: 100
 ```
 
 ### tts
@@ -135,6 +164,12 @@ logging:
 ## 添加新 Provider
 
 ### 添加新 ASR（如阿里云）
+
+> **V2 #1 参考实现**：`sherpa_onnx` provider 是 v0.2.2 的首个真 ASR 实现。
+> 看 `bridge/src/xiaozhi_bridge/asr/sherpa_onnx.py` 可以了解完整的
+> “config 校验 + lazy load + 真转写循环”模板（~250 行，包括文档
+> 化的 3 个 sherpa-onnx 坑点）。子类化 `ASRBase` 后只需重写
+> `transcribe(audio, sample_rate, channels)`。
 
 1. 创建文件 `bridge/src/xiaozhi_bridge/asr/aliyun.py`：
 

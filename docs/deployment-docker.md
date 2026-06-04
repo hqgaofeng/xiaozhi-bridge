@@ -43,6 +43,29 @@ openclaw:
 `api_key` 在宿主机 `~/.openclaw/openclaw.json` 的 `gateway.auth.token` 字段。
 `config.yaml` 在 `.gitignore` 里——不会被 commit。
 
+**V2 #1 起（v0.2.2）还要多一步：下载 sherpa-onnx ASR 模型。**
+
+```bash
+# 一次性下载到 host（~500MB）
+mkdir -p /opt/xiaozhi-bridge/models
+cd /opt/xiaozhi-bridge/models
+curl -L -o sherpa-bilingual.tar.bz2 \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2
+tar -xjf sherpa-bilingual.tar.bz2
+rm sherpa-bilingual.tar.bz2   # 省 500MB 磁盘
+
+# docker-compose.yml 里 bridge 服务的 volumes 段已包含：
+#   /opt/xiaozhi-bridge/models:/opt/xiaozhi-bridge/models:ro
+# （V2 #1 改动）所以这一步只需要保证 host 路径有东西。
+```
+
+**如果不准备模型**（只跑开发 / 不需要真 ASR），可以在 `config.yaml` 里：
+
+```yaml
+asr:
+  provider: mock   # 走虚拟抑 ASR，不加载模型
+```
+
 ### 2.3 准备宿主上的 openclaw（必做）
 
 `xiaozhi-bridge` 通过 `host.docker.internal` 调宿主上的 openclaw，需要
@@ -234,6 +257,32 @@ XIAOZHI_BRIDGE_WS_URL=ws://127.0.0.1:8000/xiaozhi/v1/ \
 
 脚本会连续 5 轮以不同 Device-Id 发 hello→listen→stop，并检查
 sqlite 中的 conversation 表。期望输出： `5/5 cases landed a
+conversation row in sqlite`（V2 #4 之后）。
+
+**V2 #1 还多一个真 ASR smoke**：`scripts/v2_1_asr_smoke.py`
+发一段真实中文 wav（从 sherpa-onnx test_wavs 取）过完整链路，
+验证 sherpa-onnx 在生产环境里真能转写、且 sqlite 中存了转写
+结果。
+
+```bash
+# 默认指向 https://jarvis.beallen.top，sherpa-onnx 测试模型
+python scripts/v2_1_asr_smoke.py
+```
+
+预期输出类似：
+```
+v2-1-asr: 163200 bytes PCM → 85 Opus frames @ 60ms
+v2-1-asr: server session_id = 'xiaozhi-4fa60a3f9f90'
+label      device              tts.stop  stt_text           db_row_text
+v2-1-asr   xiaozhi-4fa60a3f9f90  ✓         这是第一种第二种…   这是第一种第二种…
+```
+
+**`✓ tts.stop` 和 `db_row_text` 不为空** 才是 V2 #1 部署验收的两点。
+如果脚本卡在 `tts.stop` 上超过 60s，多半是 openclaw thinking 模式
+起用了；该脚本设了 120s 总体 deadline，正常情况 30s 内完。
+
+**注意**：v2_1_asr_smoke.py 需要 `opuslib` （bridge 运行时已含，但
+本地开发环境要 `pip install opuslib`）。
 conversation row in sqlite`。
 
 > 不依赖 pytest，**也不走 CI**（CI 没跑着 openclaw + bridge

@@ -110,23 +110,37 @@
 
 ```python
 class ASRBase(Protocol):
-    async def transcribe(self, audio: bytes, sample_rate: int) -> str: ...
+    async def transcribe(self, audio: bytes, sample_rate: int, channels: int = 1) -> ASRResult: ...
 ```
 
-- `base.py`：接口定义 + 注册表
-- `mock.py`：测试用 mock（V1 真用）
-- 真 ASR（aliyun / tencent / xfyun / funasr）—— **V2 TODO**
+**Provider 注册表**（V2 #1 起，v0.2.2）：
+
+| Provider | 文件 | 状态 | 说明 |
+|---|---|---|---|
+| `mock` | `mock.py` | V1 | 返固定/随机文本，不看 audio |
+| `sherpa_onnx` | `sherpa_onnx.py` | V2 #1（默认） | 本地 ONNX streaming Zipformer (zh+en)，CPU 推理 |
+| `cloud` | `cloud.py` | 骨架（未实现） | 为 Aliyun/Tencent/iFlytek/Volcense 预留接口与 schema |
+
+- `base.py`：接口定义 + `@register_asr("name")` 装饰器 + `get_asr(name, options)` 工厂
+- `sherpa_onnx.py`：v0.2.2 首个真实现，~250 行含 3 个官方坑点文档化（accept_waveform 要 float32、modeling_unit 默认 cjkchar、decode 是 pull-based）
+- 配置文件 `asr.provider` 切换；`asr.options` 是各 provider 自己的私有 dict
 
 #### 3.1.4 TTS 抽象层 (`tts/`)
 
 ```python
 class TTSBase(Protocol):
-    async def synthesize_stream(self, text: str) -> AsyncIterator[bytes]: ...
+    async def synthesize_stream(self, text: str, sample_rate: int = 24000) -> AsyncIterator[TTSChunk]: ...
 ```
 
+**Provider 注册表**（V2 #1 顺手定骨架，v0.2.2）：
+
+| Provider | 文件 | 状态 | 说明 |
+|---|---|---|---|
+| `mock` | `mock.py` | V1 | 生成 silence 或 440Hz tone，文本长度驱动时长 |
+| `cloud` | `cloud.py` | 骨架（未实现） | 为 edge-tts/Aliyun SAMI/Volcengine/GPT-SoVITS 预留 |
+
 - `base.py`：接口定义 + 注册表
-- `mock.py`：用 opuslib 把文本编码成 Opus 60ms 帧（V1 真用）
-- 真 TTS（edge-tts / 火山引擎 / GPT-SoVITS）—— **V2 TODO**
+- 真 TTS 实现（edge-tts / Aliyun / Volcengine / GPT-SoVITS）—— **V2 #2 计划中**
 
 #### 3.1.5 LLM 客户端 (`llm/openclaw.py`)
 
@@ -407,14 +421,14 @@ server {
 
 ## 7. V2 / V3 TODO（12 个候选）
 
-按推荐顺序：
+按推荐顺序，**V2 #1 真 ASR 已完成**（V0.2.2）：
 
-1. **真 ASR**（funasr / sherpa-onnx / 阿里云）
-2. **真 TTS**（edge-tts / 火山引擎 / GPT-SoVITS）
-3. **FastAPI HTTP API**（`/api/devices`、`/api/conversations`、`/api/iot`、`/api/config`、`/api/logs/stream`）
-4. **SQLite 对话持久化**
-5. **智控台接真数据**（调 `/api/`）
-6. **多设备管理**（设备 ID 路由 + 设备表）
+1. ✅ **真 ASR**（sherpa-onnx 本地 / V2 #X 阿里云）—— V2 #1 默认走 sherpa-onnx
+2. **真 TTS**（edge-tts / 火山引擎 / GPT-SoVITS）—— V2 #2 计划
+3. ✅ FastAPI HTTP API（`/api/devices`、`/api/conversations`、`/api/iot`、`/api/config`、`/api/logs/stream`）—— V2 #3 v0.2.0
+4. ✅ SQLite 对话持久化 —— V2 #4 v0.2.1
+5. ✅ 智控台接真数据（调 `/api/`）—— V2 #5 web 0.2.0
+6. **多设备管理**（设备 ID 路由 + 设备表）—— V2 #6 计划
 7. **反向 MCP**（openclaw 主动调 ESP32 上的传感器/动作）
 8. **OTA 固件更新**
 9. **MQTT 协议支持**

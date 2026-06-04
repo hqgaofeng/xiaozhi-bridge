@@ -4,6 +4,87 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.2] - 2026-06-04
+
+### V2 #1 real ASR (sherpa-onnx, bilingual zh+en, local CPU)
+
+**The headline change of this release**: bridge 默认走真 ASR，
+不再用 mock。VPS 1G 内存 + 1G swap 推拉得动。
+
+**ASR provider 注册表**（`bridge/src/xiaozhi_bridge/asr/`）：
+
+- `mock` (V1) — 返固定/随机文本，V1 默认。v0.2.2 仍可用但不默认。
+- `sherpa_onnx` (V2 #1, 默认) — 本地 streaming Zipformer，
+  双语（中文 + 英文 bpe fallback），CPU 推理。不需 API key、
+  无外部费用、离线可用。
+- `cloud` (骨架) — `Aliyun`/`Tencent`/`iFlytek`/`Volcengine`
+  的云 API 接入点预留，`cloud.py` 抽象 + 错误处理 + `vendor`
+  配置 schema 齐备；具体实现 V2 #X 接手。
+
+**TTS provider 补齐抽象**（`bridge/src/xiaozhi_bridge/tts/`）：
+
+- `mock` (V1) — 生成 silence 或 440Hz tone。
+- `cloud` (V2 #1 骨架) — `edge-tts`/`Aliyun SAMI`/Volcengine/
+  GPT-SoVITS 接入点预留；具体实现 V2 #2。
+
+**v0.2.2 关键决策**：
+
+- **fpdf32 vs int8** ：sherpa-onnx 同时提供 fp32（~360MB）和
+  int8（~200MB）模型。默认选 **fp32**（测试阶段量小、准确率
+  优先），代码自动检测 `model_dir` 里哪套在。未来切 int8 只改
+  默认值。
+
+- **模型加载 lazy** ：`SherpaOnnxASR._ensure_recognizer()` 在首次
+  `transcribe()` 才加载权重（3.6s 峰值），bridge 启动快。
+
+- **P2 资源预算**（VPS 1G + 1G swap）：
+
+  | 指标 | 测量值 |
+  |---|---|
+  | 模型加载 | 3.6s (int8) |
+  | 5.1s 中文音频转写 | 2.2s |
+  | RTF（实时因子） | 0.43（比实时快 2.3 倍）|
+  | bridge 容器 mem_limit | 200m → 500m |
+
+- **可观测性**（V2 #1 附带）：每次 transcribe 输出
+  `audio_duration_ms / transcribe_ms / rtf / text_preview`，
+  prod 能 grep。
+
+- **部署**：`/opt/xiaozhi-bridge/models` 从 host bind-mount 进
+  bridge 容器（ro），image 体积干净。`config/config.example.yaml`
+  加 `model_dir` 模板。
+
+**Sh**perta-onnx 踩过 3 个文档化在 docstring 里的真坑：
+
+1. `accept_waveform` 要 **float32 [-1, 1]**，不是 int16。
+2. `modeling_unit` 默认 cjkchar，bilingual 模型是 bpe。
+   不显式设 `modeling_unit="bpe"` + `bpe_vocab=...` 静默出空字。
+3. decode 是 pull-based：`input_finished` 后必须 loop
+   `is_ready + decode_stream` 直到 `is_ready=False` 再 `get_result`。
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/asr/cloud.py` (83 行) —
+  `CloudASRBase` 骨架。`vendor: aliyun/tencent/xfyun/volcengine`
+  配置位预留。
+- `bridge/src/xiaozhi_bridge/asr/sherpa_onnx.py` (302 行) —
+  v0.2.2 首个真实现，~250 行。
+- `bridge/src/xiaozhi_bridge/tts/cloud.py` (89 行) —
+  `CloudTTSBase` 骨架。V2 #2 接手。
+- `scripts/v2_1_asr_smoke.py` (262 行) — 真 ASR 端到端 smoke：
+  读 sherpa-onnx test_wavs/1.wav → Opus 编码 → 公网
+  `wss://jarvis.beallen.top` 走完 LLM+TTS → 检查 sqlite 中
+  `stt_text` 字段。CI 不跑（需真模型），手动跑验收。
+
+**测试**：57 → 74（+17: 6 cloud + 5 sherpa-onnx 骨架 + 5 e2e
++ 1 修）。CI 4/4 jobs green。
+
+**Not in this release**（V2 #2+ 计划）：
+
+- 真 TTS 实现（V2 #2）
+- 多个设备名/云 API vendor 实现（V2 #X）
+- LLM/TTS streaming 误连、模型热更新、限流、电路熔断等。
+
 ## [Unreleased]
 
 ### Done since 0.2.1

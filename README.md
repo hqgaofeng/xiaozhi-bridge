@@ -22,6 +22,7 @@
 | **V2 #3** | v0.2.0 | 2026-06-03 | FastAPI HTTP API | bridge-api 独立 uvicorn 进程，11 个 `/api/*` 端点，aiosqlite + WAL |
 | **V2 #4** | v0.2.1 | 2026-06-03 | 设备关联 | `upsert_device` 接受 `None` 转到 `unknown` 桶；新增 `GET /api/devices/{id}/conversations`；+11 单测 |
 | **V2 #5** | web 0.2.0 | 2026-06-03 | 智控台接真数据 | 5 个 page 全部从 hardcoded mock 改为 `fetch /api/*`；新增 `useApi<T>()` hook；修 Vite dev proxy target (8000→8001) |
+| **V2 #1** | v0.2.2 | 2026-06-04 | 真 ASR | sherpa-onnx 本地 streaming Zipformer（双语 zh+en），CPU 推理；首 transcribe 才 lazy load；fp32/int8 自动检测；+17 单测；prod live e2e 验过 |
 
 ### 🧪 端到端实测
 
@@ -31,12 +32,13 @@
 | HTTP API | 公网 `GET https://jarvis.beallen.top/api/conversations` | 读出真 M3 对话记录（含 device/session/turns） |
 | 真实对话 | "讲个笑话" / "你好小智" | M3 返程序员笑话 / "我是贾维斯，不是小智 😄" |
 | 自动化 e2e | `scripts/e2e_smoke.py`（5 cases：3 esp32-001 + 2 无 header） | 5/5 landed，db 写入正确，unknown 桶工作 |
+| 真 ASR 端到端 | `scripts/v2_1_asr_smoke.py`（5.1s 真中文 wav → 公网 wss → LLM+TTS） | sherpa-onnx 转写存进 db，tts.stop 收到，prod live 验过 |
 
 ### 🚧 V2 路线图（12 项）
 
 | # | 主题 | 状态 |
 |---|---|---|
-| 1 | 真 ASR（funasr / sherpa-onnx / 阿里云） | ⏳ |
+| 1 | 真 ASR（sherpa-onnx / 阿里云） | ✅ v0.2.2 |
 | 2 | 真 TTS（edge-tts / 火山 / GPT-SoVITS） | ⏳ |
 | 3 | FastAPI HTTP API | ✅ v0.2.0 |
 | 4 | SQLite 对话持久化 | ✅ v0.2.1 |
@@ -49,7 +51,7 @@
 | 11 | RAG | ⏳ |
 | 12 | Prometheus / 告警 / 备份 | ⏳ |
 
-**进度**：4 / 12（V2 #3 + #4 + #5 完成；#1 / #2 / #6 推荐优先）
+**进度**：5 / 12（V2 #1 + #3 + #4 + #5 完成；#2 + #6 推荐优先）
 
 ## ✨ 特性
 
@@ -59,7 +61,7 @@
 - 🤖 **M3 大脑** — 走 openclaw + MiniMax M3，1M context，工具调用
 - 📡 **完整协议** — xiaozhi WebSocket + MCP JSON-RPC 2.0
 - 🎨 **现代智控台** — React 19 + TypeScript + Tailwind + shadcn/ui 风格
-- 🧪 **57 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test，需 ）
+- 🧪 **74 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test，需 ）
 - 📚 **6 个详细文档** — 架构/协议/API/部署/配置/日志/V1 发布说明
 - 🔒 **隔离会话** — `user: xiaozhi-bridge` 派生独立 session，不污染主会话
 - 🛡️ **真实部署** — `https://jarvis.beallen.top` 公网可访问
@@ -188,9 +190,10 @@ xiaozhi-bridge/
 │   │   ├── asr/ tts/ llm/ mcp/ protocol/  # V1 模块
 │   │   ├── server.py           # bridge WS 进程，集成写 db
 │   │   └── config.py
-│   └── tests/                  # 57 个测试（27 V1 + 15 V2 #3 + 15 V2 #4，含 _get_header）
+│   └── tests/                  # 74 个测试（27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1，含 _get_header）
 ├── scripts/                    # 运维工具
-│   └── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
+│   ├── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
+│   └── v2_1_asr_smoke.py       # V2 #1 真 ASR 端到端（5.1s 真中文 wav → 公网 wss）
 ├── web/                        # React 智控台（V2 #5 接 /api/*，web 0.2.0）
 │   ├── package.json
 │   ├── src/
