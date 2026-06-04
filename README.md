@@ -14,19 +14,42 @@
 
 ## 项目状态
 
-✅ **V1 已发布**（v0.1.2 → v0.1.5，2026-06-03） — 详见 [docs/v1-release-notes.md](docs/v1-release-notes.md)
-✅ **V2 #3 已发布**（v0.2.0，2026-06-03） — FastAPI HTTP API（bridge-api 独立进程，11 个 /api/* 端点，aiosqlite + WAL）
-✅ **V2 #4 已发布**（v0.2.1，2026-06-03） — device association：`upsert_device` 接受 `None` 转到 `unknown` 桶；新增 `GET /api/devices/{id}/conversations`；11 个新单测。
-✅ **V2 #5 已发布**（web 0.2.0，2026-06-03） — 智控台接真数据：5 个 page 全部从 hardcoded mock 改 为 fetch /api/*，新增 `useApi<T>()` hook + 修 Vite dev proxy target（8000→8001）。
+### ✅ 已发布阶段
 
-**端到端跑通**：
-- WebSocket：从公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 连上 xiaozhi-esp32 协议，走 bridge → openclaw → MiniMax-M3，返回中文实际响应（120+ Opus 帧）。
-- HTTP API：调 `https://jarvis.beallen.top/api/conversations` 能读真 M3 对话记录。
-- 实测两次对话："讲个笑话"→ 程序员笑话、"你好小智"→ "我是贾维斯，不是小智 😄"。
+| 阶段 | 版本 | 日期 | 主题 | 详情 |
+|---|---|---|---|---|
+| **V1** | v0.1.2 → v0.1.5 | 2026-06-03 | 最小闭环 | WebSocket 协议 / LLM 桥接 / MCP 工具 / Mock ASR+TTS / React 智控台 / Docker Compose / HTTPS 域名。详见 [docs/v1-release-notes.md](docs/v1-release-notes.md) |
+| **V2 #3** | v0.2.0 | 2026-06-03 | FastAPI HTTP API | bridge-api 独立 uvicorn 进程，11 个 `/api/*` 端点，aiosqlite + WAL |
+| **V2 #4** | v0.2.1 | 2026-06-03 | 设备关联 | `upsert_device` 接受 `None` 转到 `unknown` 桶；新增 `GET /api/devices/{id}/conversations`；+11 单测 |
+| **V2 #5** | web 0.2.0 | 2026-06-03 | 智控台接真数据 | 5 个 page 全部从 hardcoded mock 改为 `fetch /api/*`；新增 `useApi<T>()` hook；修 Vite dev proxy target (8000→8001) |
 
-**V1 包含**：WebSocket 协议 / LLM 桥接 / MCP 工具 / Mock ASR+TTS / React 智控台 / Docker Compose / 域名 HTTPS（jarvis.beallen.top）。
+### 🧪 端到端实测
 
-**V2 TODO 列表**（12 项）：FastAPI HTTP API ✅ / 对话持久化 ✅ / Web 接真数据 / 真 ASR / 真 TTS / 多设备 / 反向 MCP / OTA / MQTT / 声纹 / RAG / 监控告警备份。
+| 链路 | 验证方式 | 结果 |
+|---|---|---|
+| WebSocket | 公网 `wss://jarvis.beallen.top/xiaozhi/v1/` 走 xiaozhi-esp32 协议 → bridge → openclaw → M3 | 5 JSON 消息 + 120+ Opus 帧，返回中文实际响应 |
+| HTTP API | 公网 `GET https://jarvis.beallen.top/api/conversations` | 读出真 M3 对话记录（含 device/session/turns） |
+| 真实对话 | "讲个笑话" / "你好小智" | M3 返程序员笑话 / "我是贾维斯，不是小智 😄" |
+| 自动化 e2e | `scripts/e2e_smoke.py`（5 cases：3 esp32-001 + 2 无 header） | 5/5 landed，db 写入正确，unknown 桶工作 |
+
+### 🚧 V2 路线图（12 项）
+
+| # | 主题 | 状态 |
+|---|---|---|
+| 1 | 真 ASR（funasr / sherpa-onnx / 阿里云） | ⏳ |
+| 2 | 真 TTS（edge-tts / 火山 / GPT-SoVITS） | ⏳ |
+| 3 | FastAPI HTTP API | ✅ v0.2.0 |
+| 4 | SQLite 对话持久化 | ✅ v0.2.1 |
+| 5 | 智控台接真数据 | ✅ web 0.2.0 |
+| 6 | 多设备 + reachability | ⏳ |
+| 7 | 反向 MCP | ⏳ |
+| 8 | OTA | ⏳ |
+| 9 | MQTT | ⏳ |
+| 10 | 声纹 | ⏳ |
+| 11 | RAG | ⏳ |
+| 12 | Prometheus / 告警 / 备份 | ⏳ |
+
+**进度**：4 / 12（V2 #3 + #4 + #5 完成；#1 / #2 / #6 推荐优先）
 
 ## ✨ 特性
 
@@ -36,7 +59,7 @@
 - 🤖 **M3 大脑** — 走 openclaw + MiniMax M3，1M context，工具调用
 - 📡 **完整协议** — xiaozhi WebSocket + MCP JSON-RPC 2.0
 - 🎨 **现代智控台** — React 19 + TypeScript + Tailwind + shadcn/ui 风格
-- 🧪 **28 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test）
+- 🧪 **57 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test，需 ）
 - 📚 **6 个详细文档** — 架构/协议/API/部署/配置/日志/V1 发布说明
 - 🔒 **隔离会话** — `user: xiaozhi-bridge` 派生独立 session，不污染主会话
 - 🛡️ **真实部署** — `https://jarvis.beallen.top` 公网可访问
