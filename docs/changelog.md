@@ -4,6 +4,65 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.8] - 2026-06-04
+
+### V2 #6.2 per-device 鉴权启用工作流
+
+**The headline change of this release**：v0.2.7 启用了
+`config.device.auth_tokens` 字典 + `_check_auth` 纯函数，
+但**未启鉴权**（opt-in 默认不验）。v0.2.8 加 **启用工作流**：
+操作员拿到一个 device_id → 一行命令启 → 固件加 header → 重启
+bridge → 零代码改动。
+
+之前要启 per-device token 需手改 yaml（容易拼写错 + 格式错），
+现在有 **`scripts/enable_auth_for_device.sh`** 工具：1 个参数 =
+`enable_auth_for_device.sh <device_id> <token>`，自动
+验证、备份、patch、重启提示。
+
+**Adds**：
+
+- `scripts/enable_auth_for_device.sh`（185 行，+x）：
+  - 验证输入（device_id + token 正则）
+  - 备份 config.yaml 为 `.bak.YYYYMMDD-HHMMSS`
+  - 3 种 patch 路径：`auth_tokens: {}` → 添加；已有但缺设备 →
+    插入；已有设备 → 旋转 token
+  - 打印 diff + 提醒 `docker compose restart bridge`
+  - 6 个集成测试（`bridge/tests/scripts/test_enable_auth.sh`）覆盖
+    add / add-second / rotate / bad-device-id / bad-token / missing-arg
+- `bridge/src/xiaozhi_bridge/server.py`：
+  - `_check_auth` 返 `(ok, reason)` 代替 `bool`，3 种 reason：
+    `no_authorization_header` / `wrong_token` /
+    `malformed_authorization`（V2 #6.2 跟 v0.2.7 唯一功能区别）
+  - WS handshake 用 reason 作 `ws.close(reason=...)`，固件
+    与运维都能看到具体错
+  - 结构化 log 加 `reason` 字段，运维 `grep handshake.unauthorized
+    reason=wrong_token` 直击
+- `web/src/pages/Devices.tsx`：详情 modal 加 **"复制 Device-Id"
+  按钮**（`CopyableId` 组件 + clipboard API + 1.2s 勾反馈），
+  让运维一键拿 MAC 字符串贴到 `enable_auth_for_device.sh`
+- 6 个新单测（`bridge/tests/test_server_auth.py` 从 11 → 17）：
+  覆盖 3 种 reason 分支 + per-device 错 token + 空 token 例外
+- `docs/deployment-docker.md` §9 **“启用 per-device 鉴权”**
+  新增、5 步上手（从 `enable_auth_for_device.sh` 到重启到验证）
+
+**Verified before commit**（V2 #1 教训 4.3）：
+
+- `uv run --no-sync ruff check src tests`: All checks passed
+- `uv run --no-sync mypy src`: Success, 32 source files
+- `uv run --no-sync pytest tests/ -q`: **92 passed**（was 86,
+  +6 V2 #6.2）, 6 skipped
+- `pnpm build`: tsc + vite 都过
+- `bash bridge/tests/scripts/test_enable_auth.sh`: 6/6 PASS
+- `v2_1_asr_smoke.py` 端到端 PASS（链路不破）
+
+**Not in this commit**：
+
+- reachability 启发式（V2 #12 follow-up）
+- HTTP API 鉴权（V2 #12）
+- `devices.auth_token` DB 列填充（follow-up）
+- 设备注册后自动填 token（**未来**：bridge handshake 成功时
+  自动调 `enable_auth_for_device.sh` 调加字典。现手动）
+
 ## [0.2.7] - 2026-06-04
 
 ### V2 #6.1 WS 鉴权：per-device token map（opt-in，链路不破）

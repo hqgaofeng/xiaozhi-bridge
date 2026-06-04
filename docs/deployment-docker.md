@@ -461,6 +461,92 @@ sudo systemctl daemon-reload
 - v0.2.5 (V2 #2.2)：unit + 脚本 + 文档（`deploy/iptables-restore.service`、
   `scripts/install_iptables_persist.sh` 检入）
 
+## 8.6 启用 per-device WS 鉴权（V2 #6.2 工作流）
+
+v0.2.7 加了 per-device token 字典 + `_check_auth` 纯函数，但
+**opt-in 默认不验**（为不破现有链路）。v0.2.8 加了 **Allen 5 步
+上手**，从 "设备已连上" 到 "该设备启 token" 零代码改动。
+
+**场景**：v0.2.7 之前，**任何人能 ping 通 `wss://jarvis.beallen.top`
+就能连你的 bridge**。VPS 公开部署后，**这个不是远程攻击，
+但公网上别的人可能偶然 ping 到。**启 per-device 鉴权后，握手要带
+正确的 bearer 才进。
+
+**前提**：设备已连上，且你能看到 web 智控台（`https://jarvis.beallen.top`
+→ Devices）里它的 Device-Id（**一般是 ESP32 的 MAC 地址**）。
+
+**5 步**：
+
+1. **拿 Device-Id**：智控台 → 点设备 → 详情 modal → 点 ID 旁边的
+   📋 复制按钮（v0.2.8 新增）。或者 SSH + curl：
+   ```bash
+   curl -s http://127.0.0.1:8001/api/devices | python3 -m json.tool
+   ```
+
+2. **生成 token**（32 字符随机）：
+   ```bash
+   openssl rand -hex 24
+   # 例返：a1b2c3d4e5f6...（48 字符 hex）
+   ```
+
+3. **加到 config**（VPS root）：
+   ```bash
+   cd /root/projects/xiaozhi-bridge
+   sudo ./scripts/enable_auth_for_device.sh <device_id> <token>
+   # 例：sudo ./scripts/enable_auth_for_device.sh esp32-aabbccddeeff a1b2c3d4...
+   # 会自动备份 + patch + diff。
+   ```
+
+4. **重启 bridge**：
+   ```bash
+   cd /root/projects/xiaozhi-bridge
+   docker compose restart bridge
+   ```
+
+5. **改固件**：固件需在 WS handshake 头加 `Authorization: Bearer <token>`
+   （**v0.2.8 之前未加 header 的固件会被拒，reason=`no_authorization_header`**）。
+
+**验证启成功**：
+
+- 错误 token：bridge log 出现 `handshake.unauthorized reason=wrong_token`。
+- 正确 token：bridge log 出现 `session.created device_id=esp32-...`。
+- 3 种 close reason 供 grep：
+  - `no_authorization_header`：固件没发 Authorization 头
+  - `wrong_token`：发了头但 token 不对
+  - `malformed_authorization`：方案不是 Bearer（例 Basic、bearer 小写）
+
+**回滚**（启错了）：
+
+```bash
+sudo cp config/config.yaml.bak.YYYYMMDD-HHMMSS config/config.yaml
+docker compose restart bridge
+```
+
+**批量启**（多设备）：
+
+```bash
+for dev in esp32-001 esp32-002 esp32-003; do
+  tok=$(openssl rand -hex 24)
+  sudo ./scripts/enable_auth_for_device.sh "$dev" "$tok"
+  echo "  $dev: $tok" >> /root/auth-tokens.txt
+done
+docker compose restart bridge
+# 然后逐个更新固件。
+```
+
+**未启**（v0.2.7 之前 + v0.2.8 不调 script = 跟现状同）：
+
+- 任何人能连 bridge（公网公开）
+- VPS 上本地调试 / 临时设备不重源启 token
+- 默认空 = 跟 V2 #5 同
+
+**未拍板**：
+
+- 设备注册后**自动**加 token（`enable_auth_for_device.sh`
+  是手动；未来可 bridge 握手成功时自动调，目前不需）
+- reachability 启发式（V2 #12 follow-up）
+- HTTP API 鉴权（V2 #12）
+
 ## 9. 生产优化建议
 
 ### 9.1 持久化日志

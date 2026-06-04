@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Cpu, Wifi, WifiOff, RefreshCw, ChevronLeft, X, Save, Trash2, MessageSquare } from 'lucide-react'
+import { Cpu, Wifi, WifiOff, RefreshCw, ChevronLeft, X, Save, Trash2, MessageSquare, Copy, Check } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api, APIError, type Device } from '@/lib/api'
@@ -321,7 +321,7 @@ function DeviceDetailModal({
               <div className="space-y-1.5 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">ID</span>
-                  <span className="font-mono text-xs">{record.id}</span>
+                  <CopyableId value={record.id} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">最近活动</span>
@@ -403,6 +403,52 @@ function DeviceDetailModal({
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+/**
+ * CopyableId — a one-line monospace device id with a copy-to-
+ * clipboard button. V2 #6.2 ships this so the operator can
+ * grab the exact Device-Id header value (e.g. the ESP32's MAC
+ * string) and paste it into:
+ *   1. config/config.yaml's device.auth_tokens key
+ *   2. the firmware's #define DEVICE_ID
+ *   3. any external management tooling
+ * Without this, the operator has to type the value by hand
+ * from the modal — easy to mistype a hex character.
+ */
+function CopyableId({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+  async function handleCopy() {
+    try {
+      // navigator.clipboard requires HTTPS or localhost;
+      // jarvis.beallen.top is HTTPS so this works in prod.
+      // In dev (http://localhost:3000) it also works because
+      // localhost is treated as a secure context.
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      // Brief flash so the user sees the action took.
+      setTimeout(() => setCopied(false), 1200)
+    } catch {
+      toast.error('复制失败，请手动选中复制')
+    }
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="font-mono text-xs">{value}</span>
+      <button
+        onClick={handleCopy}
+        className="p-0.5 rounded hover:bg-muted"
+        title={`复制 Device-Id：${value}`}
+        type="button"
+      >
+        {copied ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Copy className="h-3 w-3 text-muted-foreground" />
+        )}
+      </button>
+    </span>
   )
 }
 

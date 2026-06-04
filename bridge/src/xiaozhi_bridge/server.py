@@ -53,20 +53,27 @@ def _check_auth(
     device_id: str | None,
     per_device_tokens: dict[str, str],
     global_token: str,
-) -> bool:
+) -> tuple[bool, str]:
     """V2 #6.1: validate the Authorization header against the
     per-device map (if the device_id is listed) or the global
-    token (fallback). Returns True if the connection is allowed.
+    token (fallback).
 
-    Rules (in this order):
-      1. If the device_id is in `per_device_tokens`, the bearer
-         must match that device's token. (Even if the global
-         token is also set, per-device wins for listed devices.)
-      2. Else if a global `global_token` is set, the bearer
-         must match it.
-      3. Else no auth — any connection is allowed (preserves
-         the V2 #5 default so the prod firmware without an
-         Authorization header keeps working).
+    V2 #6.2: return (ok, reason) instead of just bool so the
+    WS handshake can close with a specific WebSocket reason
+    (the client side + bridge logs both surface the reason).
+    Reasons:
+      - ""  : allowed (no reason needed)
+      - "no_authorization_header" : client didn't send one
+      - "wrong_token"             : client sent a non-matching
+        bearer. Doesn't disclose whether the device_id is in the
+        map or whether the global token differs (constant-time
+        failure messages, prevents side-channel enumeration).
+      - "malformed_authorization" : wrong scheme (Basic, Digest,
+        lowercase 'bearer', etc.) or trailing/leading whitespace.
+    The V2 #6.1 docstring rules still apply:
+      1. per_device[device_id] (if listed) — must match
+      2. global_token                  — must match
+      3. neither set → no auth (allow)
 
     Why a pure function (not a method)? It has no I/O and no
     side effects — easy to unit-test the policy in isolation
@@ -81,9 +88,22 @@ def _check_auth(
         expected = global_token
     # 3. No policy = allow.
     if not expected:
-        return True
+        return True, ""
     # Policy in effect — bearer must match exactly.
-    return auth_header == f"Bearer {expected}"
+    if not auth_header:
+        return False, "no_authorization_header"
+    # Basic scheme sanity — distinguish "scheme wrong" from
+    # "scheme right but value wrong" so the firmware can fix
+    # the right thing.
+    if not auth_header.startswith("Bearer "):
+        return False, "malformed_authorization"
+    # Compare exact match; trailing/leading whitespace makes
+    # the bearer not match. We surface this as 'wrong_token'
+    # (not 'malformed') because the scheme IS Bearer, the
+    # value is just wrong.
+    if auth_header != f"Bearer {expected}":
+        return False, "wrong_token"
+    return True, ""
 
 
 def _get_header(ws: WebSocketServerProtocol, name: str, default: str | None = None) -> str | None:
@@ -263,18 +283,29 @@ class XiaozhiBridgeServer:
             # Authorization header keeps working).
             device_id = _get_header(ws, "Device-Id")
             auth_header = _get_header(ws, "Authorization", "")
-            if not _check_auth(
+            ok, reason = _check_auth(
                 auth_header,
                 device_id,
                 self.config.device.auth_tokens,
                 self.config.device.auth_token,
-            ):
+            )
+            if not ok:
+                # V2 #6.2: surface the specific auth failure to
+                # the firmware (via ws close reason) AND the bridge
+                # log (via structlog event). The close reason is
+                # one of 'no_authorization_header' /
+                # 'wrong_token' / 'malformed_authorization' so
+                # the operator can grep the log and see exactly
+                # which case fired.
                 self.log.warning(
                     "handshake.unauthorized",
                     peer=peer,
                     device_id=device_id,
+                    reason=reason,
                 )
-                await ws.close(code=1001, reason="unauthorized")
+                # WebSocket close reason is limited to 123 bytes
+                # (RFC 6455 §7.4.1); our 3 reasons are well under.
+                await ws.close(code=1001, reason=reason)
                 return
 
             # Create session

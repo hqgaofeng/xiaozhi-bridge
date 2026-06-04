@@ -432,7 +432,7 @@ server {
 
 ## 7. V2 / V3 TODO（12 个候选）
 
-按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts**（V0.2.3 实现 / V0.2.4 默认）/**V2 #2.2 iptables 持久化**（V0.2.5）/**V2 #6 设备元数据 + 多设备管理**（V0.2.6）/**V2 #6.1 WS 鉴权**（V0.2.7）已完成：
+按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts**（V0.2.3 实现 / V0.2.4 默认）/**V2 #2.2 iptables 持久化**（V0.2.5）/**V2 #6 设备元数据 + 多设备管理**（V0.2.6）/**V2 #6.1 WS 鉴权**（V0.2.7）/**V2 #6.2 鉴权启用工作流**（V0.2.8）已完成：
 
 1. ✅ **真 ASR**（sherpa-onnx 本地 / V2 #X 阿里云）—— V2 #1 默认走 sherpa-onnx
 2. ✅ **真 TTS edge-tts**（edge-tts / V2 #2 火山引擎 / GPT-SoVITS 后续）—— V2 #2 edge-tts 已实现；V2 #2.1 修 VPS egress 后 v0.2.4 翻默认；V2 #2.2 systemd iptables-restore.service 让 v0.2.4 持久化
@@ -441,6 +441,7 @@ server {
 5. ✅ 智控台接真数据（调 `/api/`）—— V2 #5 web 0.2.0
 6. ✅ **多设备管理**（设备 ID 路由 + 设备表）—— V2 #6 v0.2.6：`devices.name/notes/room` 3 列 + migration + `PATCH/DELETE /api/devices/{id}` + web 详情 modal 编辑/删除
 6a. ✅ **WS 鉴权**（per-device token 字典）—— V2 #6.1 v0.2.7：`config.device.auth_tokens` 字典 + `_check_auth` 纯函数；opt-in（不配 = 不验，同 V2 #5）
+6b. ✅ **鉴权启用工作流** —— V2 #6.2 v0.2.8：`scripts/enable_auth_for_device.sh` 5 步上手 + 6 集成测试；`ws.close(reason)` 3 种详细（`no_authorization_header` / `wrong_token` / `malformed_authorization`）；web Device-Id 复制按钮
 7. **反向 MCP**（openclaw 主动调 ESP32 上的传感器/动作）
 8. **OTA 固件更新**
 9. **MQTT 协议支持**

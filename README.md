@@ -28,6 +28,7 @@
 | **V2 #2.2** | v0.2.5 | 2026-06-04 | iptables 持久化 | systemd `iptables-restore.service` + `scripts/install_iptables_persist.sh`；`After=network-online.target docker.service`；重启 host 不丢 V2 #2.1 修复；不装 iptables-persistent (避免动 host apt) |
 | **V2 #6** | v0.2.6 | 2026-06-04 | 设备元数据 + 多设备 | `devices.name/notes/room` 3 列 + in-place migration (PRAGMA table_info + ADD COLUMN)；`PATCH/DELETE /api/devices/{id}`；web 详情 modal 编辑/删除；19 个新单测 |
 | **V2 #6.1** | v0.2.7 | 2026-06-04 | WS per-device 鉴权 | `config.device.auth_tokens: dict` 字典；`_check_auth` 纯函数；opt-in（不配 = 不验，跟 V2 #5 同）；11 个新单测；**VPS prod 链路不破** |
+| **V2 #6.2** | v0.2.8 | 2026-06-04 | 鉴权启用工作流 | `scripts/enable_auth_for_device.sh` + 6 集成测试；`ws.close(reason)` 3 种详细 (`no_authorization_header` / `wrong_token` / `malformed_authorization`)；web Device-Id 复制按钮；92 passed 总数 |
 
 ### 🧪 端到端实测
 
@@ -60,7 +61,7 @@
 | 11 | RAG | ⏳ |
 | 12 | Prometheus / 告警 / 备份 | ⏳ |
 
-**进度**：8 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 + #6 + #6.1 完成；#7 反向 MCP 推荐优先）
+**进度**：9 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 + #6 + #6.1 + #6.2 完成；#7 反向 MCP 推荐优先）
 
 ## ✨ 特性
 
@@ -199,11 +200,12 @@ xiaozhi-bridge/
 │   │   ├── asr/ tts/ llm/ mcp/ protocol/  # V1 模块
 │   │   ├── server.py           # bridge WS 进程，集成写 db
 │   │   └── config.py
-│   └── tests/                  # 92 个测试（86 passed + 6 skipped: 27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1 + 10 V2 #2 + 19 V2 #6 + 11 V2 #6.1，含 _get_header、migration、PATCH/DELETE、_check_auth）
+│   └── tests/                  # 98 个测试（92 passed + 6 skipped: 27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1 + 10 V2 #2 + 19 V2 #6 + 17 V2 #6.1+#6.2 + 6 集成脚本测试（scripts/），含 _get_header、migration、PATCH/DELETE、_check_auth、enable_auth_for_device）
 ├── scripts/                    # 运维工具
 │   ├── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
 │   ├── v2_1_asr_smoke.py       # V2 #1 真 ASR 端到端（5.1s 真中文 wav → 公网 wss）
-│   └── install_iptables_persist.sh  # V2 #2.2 — 装 iptables-restore systemd unit
+│   ├── install_iptables_persist.sh  # V2 #2.2 — 装 iptables-restore systemd unit
+│   └── enable_auth_for_device.sh    # V2 #6.2 — 加 device_id → token 到 config.yaml
 ├── deploy/                     # VPS 部署资产
 │   └── iptables-restore.service  # V2 #2.2 — 重启后自动恢复 egress fix
 ├── web/                        # React 智控台（V2 #5 接 /api/*，web 0.2.0）
