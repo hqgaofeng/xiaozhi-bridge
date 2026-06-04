@@ -25,6 +25,7 @@
 | **V2 #1** | v0.2.2 | 2026-06-04 | 真 ASR | sherpa-onnx 本地 streaming Zipformer（双语 zh+en），CPU 推理；首 transcribe 才 lazy load；fp32/int8 自动检测；+17 单测；prod live e2e 验过 |
 | **V2 #2** | v0.2.3 | 2026-06-04 | 真 TTS provider | edge-tts (Microsoft 神经语音，zh/en)；流式 mp3→pydub (ffmpeg)→PCM int16 24kHz；+10 单测 (6 unit + 4 env-gated e2e)；VPS egress 未通，默认仍为 mock |
 | **V2 #2.1** | v0.2.4 | 2026-06-04 | flip edge 默认 | VPS host iptables 修 2 处（FORWARD ACCEPT + POSTROUTING MASQUERADE for bridge subnet）；tts.provider 默认 mock→edge；prod live 验 edge_tts_synthesis_done + tts.stop + db 写入 |
+| **V2 #2.2** | v0.2.5 | 2026-06-04 | iptables 持久化 | systemd `iptables-restore.service` + `scripts/install_iptables_persist.sh`；`After=network-online.target docker.service`；重启 host 不丢 V2 #2.1 修复；不装 iptables-persistent (避免动 host apt) |
 
 ### 🧪 端到端实测
 
@@ -37,6 +38,7 @@
 | 真 ASR 端到端 | `scripts/v2_1_asr_smoke.py`（5.1s 真中文 wav → 公网 wss → LLM+TTS） | sherpa-onnx 转写存进 db，tts.stop 收到，prod live 验过 |
 | 真 TTS 实现验证 | v0.2.3 容器内 `pydub.AudioSegment.from_mp3` mp3→pcm decode 验过；edge-tts 6 unit + 4 e2e (env-gated) 单元测试 | 实现完整；VPS docker egress 被 FORWARD 拒，flip 默认留到 V2 #2.1 |
 | 真 TTS 端到端 | v0.2.4 `scripts/v2_1_asr_smoke.py`（5.1s 中文 wav → 公网 wss） | edge_tts_synthesis_start/done (chunks=257, 4.4s, zh-CN-XiaoxiaoNeural) + tts.stop 收到 + db 写入新 session |
+| iptables 持久化 | v0.2.5 `scripts/install_iptables_persist.sh` 跑过 + `systemctl start iptables-restore` 模拟 boot 后 rule 自动恢复 | FORWARD rule 1+2 + MASQUERADE rule 1 都重新出现 |
 
 ### 🚧 V2 路线图（12 项）
 
@@ -55,7 +57,7 @@
 | 11 | RAG | ⏳ |
 | 12 | Prometheus / 告警 / 备份 | ⏳ |
 
-**进度**：6 / 12（V2 #1 + #2 + #2.1 + #3 + #4 + #5 完成；#6 多设备 推荐优先）
+**进度**：6 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 完成；#6 多设备 推荐优先）
 
 ## ✨ 特性
 
@@ -197,7 +199,10 @@ xiaozhi-bridge/
 │   └── tests/                  # 84 个测试（27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1 + 10 V2 #2，含 _get_header）
 ├── scripts/                    # 运维工具
 │   ├── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
-│   └── v2_1_asr_smoke.py       # V2 #1 真 ASR 端到端（5.1s 真中文 wav → 公网 wss）
+│   ├── v2_1_asr_smoke.py       # V2 #1 真 ASR 端到端（5.1s 真中文 wav → 公网 wss）
+│   └── install_iptables_persist.sh  # V2 #2.2 — 装 iptables-restore systemd unit
+├── deploy/                     # VPS 部署资产
+│   └── iptables-restore.service  # V2 #2.2 — 重启后自动恢复 egress fix
 ├── web/                        # React 智控台（V2 #5 接 /api/*，web 0.2.0）
 │   ├── package.json
 │   ├── src/

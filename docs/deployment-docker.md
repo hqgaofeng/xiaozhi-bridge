@@ -426,12 +426,40 @@ docker exec <container> sh -c \
 # 应输出 OK
 ```
 
-**持久化**（host root）：重启用 `iptables-save` + `iptables-restore`。
-v0.2.4 不动这层（**单提 Issue/PR** 跟踪）。Racknerd VPS 推荐
-装 `iptables-persistent` apt 包。
+**持久化**（v0.2.5，V2 #2.2）：**`scripts/install_iptables_persist.sh`**
+一键装 systemd unit（`deploy/iptables-restore.service`）走完以下3步：
 
-**相关 commit**：v0.2.4 是部署默认 flip，iptables 修改本身
-**不在 git 里**。
+```bash
+sudo ./scripts/install_iptables_persist.sh
+# 1. iptables-save > /etc/iptables.rules
+# 2. install deploy/iptables-restore.service to /etc/systemd/system/
+# 3. systemctl daemon-reload + enable + start
+```
+
+`iptables-restore.service` 在 `network-online.target` + `docker.service`
+之后起，**重启 host 后 FORWARD ACCEPT + POSTROUTING MASQUERADE 自动
+恢复**。unit 文件检入 `deploy/` 目录。
+
+**Why not iptables-persistent apt**（**未装**，未拍板）：
+- 会动 host apt 状态
+- 需 interactive debconf 提示（"存 IPv4/IPv6 规则？"）
+- systemd unit 方案同等可靠 + 100% 可审计（unit 文件在仓里）
+
+**回滚**：
+```bash
+sudo systemctl disable --now iptables-restore
+sudo rm /etc/systemd/system/iptables-restore.service
+sudo rm /etc/iptables.rules
+sudo systemctl daemon-reload
+```
+
+**验证（未做真重启）**：模拟 "清空 + 启 service + 验证恢复" 已过（V2 #2.2
+工作）。真重启验证需 Allen 拍板（会断 VPS 连接）。
+
+**相关 commits**：
+- v0.2.4 (V2 #2.1)：iptables 修改 + flip edge 默认（修改本身不在 git 里）
+- v0.2.5 (V2 #2.2)：unit + 脚本 + 文档（`deploy/iptables-restore.service`、
+  `scripts/install_iptables_persist.sh` 检入）
 
 ## 9. 生产优化建议
 

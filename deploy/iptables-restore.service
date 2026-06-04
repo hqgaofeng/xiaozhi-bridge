@@ -1,0 +1,37 @@
+[Unit]
+Description=Restore iptables firewall rules (V2 #2.1 egress fix)
+Documentation=man:iptables-restore(8)
+# Order: network ready → docker started → iptables restored.
+# After=docker.service means docker has added its DOCKER-USER/
+# DOCKER-FORWARD subchains to the FORWARD chain before we
+# insert our custom rules at the top. This is safe because:
+#   - Our rules are inserted at the top of FORWARD
+#     (-I FORWARD 1 / 2), so they take priority over
+#     DOCKER-FORWARD's child-chain ACCEPTs.
+#   - iptables-save wrote the current full state (including
+#     DOCKER chain entries) so docker's own rules are
+#     preserved on restore.
+After=network-online.target docker.service
+Before=
+# Don't want to be in the same transaction as docker service
+# restarts (operator might want to flush iptables during
+# docker debugging).
+PartOf=
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Use iptables-restore to apply the saved ruleset. The file
+# includes comments with counters, which iptables-restore
+# ignores (it just resets counters to 0 on restore).
+ExecStart=/sbin/iptables-restore /etc/iptables.rules
+# On stop, do NOT flush (we want rules to persist across
+# service restarts, and we don't want a brief window where
+# egress is broken if the service is restarted manually).
+ExecStop=
+# Lightweight hardening: don't run as root in unnecessary
+# places, but iptables-restore needs CAP_NET_ADMIN.
+# Uphold=root + NoNewPrivileges is unnecessary for our case.
+
+[Install]
+WantedBy=multi-user.target

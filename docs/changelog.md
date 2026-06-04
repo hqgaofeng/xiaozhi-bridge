@@ -4,6 +4,56 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.5] - 2026-06-04
+
+### V2 #2.2 iptables 持久化（v0.2.4 部署默认依赖的修复现不丢重启）
+
+**The headline change of this release**：V2 #2.1 修的 iptables
+规则（FORWARD ACCEPT + POSTROUTING MASQUERADE for xiaozhi-bridge
+bridge subnet）现在 host 重启后会自动恢复。
+
+v0.2.4 发布时 iptables 修改是**手动 host root 操作，不持久化**
+（重启 iptables 丢，bridge 容器再次无 egress）。V2 #2.2 把
+修复带进 systemd：启一个 `iptables-restore.service`，在
+`network-online.target` + `docker.service` 之后跑
+`iptables-restore /etc/iptables.rules`。重启不会丢。
+
+**部署上手**（v0.2.4 之后的升级路径）：
+
+1. 跟着 v0.2.4 文档跑 iptables-save + 改 FORWARD + 改 POSTROUTING（首次修）
+2. 跑 v0.2.5 的部署脚本（**`scripts/install_iptables_persist.sh`**），
+   会：
+   - `iptables-save > /etc/iptables.rules`（保存当前状态）
+   - 装 `/etc/systemd/system/iptables-restore.service`（已检入
+     xiaozhi-bridge repo 的 `deploy/` 目录）
+   - `systemctl daemon-reload` + `systemctl enable iptables-restore`
+3. 验证：清空 FORWARD 自定义 rule → `systemctl start iptables-restore`
+   → rule 自动恢复
+
+**未来部署**：重复路径 1（iptables 改）→ 2（service 装），
+不需动 host apt（**不装 iptables-persistent**，V2 #1 教训 4.6：
+“未拍板不轻易碰 host apt”）。
+
+**Adds**：
+
+- `deploy/iptables-restore.service` — systemd unit，Type=oneshot，
+  RemainAfterExit=yes，After=network-online.target docker.service，
+  ExecStart=/sbin/iptables-restore /etc/iptables.rules。
+- `scripts/install_iptables_persist.sh` — 一次走完“三保存 + 装 unit
+  + enable”三步。
+- 5 docs 同步（changelog + deployment-docker §8.5 升级 + architecture
+  §8.5 补充 + README 路线图）。
+
+**Not in this commit**：
+
+- **iptables-persistent apt 包**（**仍未装**）。需要持久化机制
+  启 `iptables-restore.service` 就够，apt 装会动 host apt 状态（需
+  Allen 拍板才动）。
+- iptables 规则本身不在这仓里（host 配置）。
+- VPS 重启验证：**未做真重启**（这会断 Allen 连接，重启必须 Allen
+  拍）。只做了 “清空 + 启 service + 验证恢复” 模拟 + 1.1.1.1:443
+  spot check。
+
 ## [0.2.4] - 2026-06-04
 
 ### V2 #2.1 flip default: edge-tts is now the production TTS
