@@ -46,18 +46,30 @@ openclaw:
   timeout: 60.0
 
 # ASR provider (pluggable)
-# V1 supports: mock
-# Add more by implementing asr/<name>.py and registering it
+# Available providers:
+#   - mock         : returns a fixed/random phrase regardless of audio (V1).
+#                    Good for dev + tests, zero cost.
+#   - sherpa_onnx  : LOCAL streaming Zipformer (bilingual zh+en), CPU only.
+#                    V2 #1 — no API key, no per-call cost. ~500MB model dir
+#                    (fp32) or ~200MB (int8). See docs/config.md §ASR.
+#   - cloud        : NOT YET IMPLEMENTED — skeleton for future
+#                    Aliyun/Tencent/iFlytek/Volcengine. Use mock or
+#                    sherpa_onnx for now.
 asr:
-  provider: mock
+  # Default to sherpa_onnx in production; switch to "mock" for dev.
+  provider: sherpa_onnx
   options:
-    # Mock-specific config — ignored by other providers
-    mode: random         # "random" | "fixed"
-    # text: "你好小智"   # used if mode=fixed
-    # phrases:            # used if mode=random
-    #   - "今天天气怎么样"
-    #   - "把灯打开"
-    latency_ms: 100
+    # Required for sherpa_onnx: directory containing tokens.txt +
+    # encoder/decoder/joiner .onnx (+ bpe.vocab for the bilingual model).
+    # In production (docker), the model lives on the host and is bind-mounted
+    # into the bridge container (see docker-compose.yml volumes).
+    model_dir: /opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+    # Optional: ONNX runtime threads (default 2). Lower on a 1-vCPU VPS.
+    # num_threads: 2
+    # Optional: "greedy_search" (default, fast) | "modified_beam_search"
+    # decoding_method: greedy_search
+    # Optional: ONNX runtime provider (default "cpu"; "cuda" reserved for V3+)
+    # provider: cpu
 
 # TTS provider (pluggable)
 # V1 supports: mock

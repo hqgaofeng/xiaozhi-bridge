@@ -70,6 +70,12 @@ services:
       - bridge-data:/app/data
       # Optional: also mount logs to the host for easy tailing.
       - ./logs/bridge:/var/log/xiaozhi-bridge
+      # V2 #1: bind-mount the sherpa-onnx model directory from the
+      # host. The model is ~500MB (fp32) — far too big to bake into
+      # the image. The bridge container is read-only on this path
+      # (it never writes to the model). model_dir in config.yaml
+      # points to the same /opt/... path as the host.
+      - /opt/xiaozhi-bridge/models:/opt/xiaozhi-bridge/models:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -78,7 +84,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    mem_limit: 200m  # bridge 本身很轻
+    # V2 #1: was 200m. sherpa-onnx fp32 model needs ~200-300MB at
+    # load, then settles at ~150-200MB. Keep the headroom for the
+    # WS server + LLM client + the rest of the runtime.
+    mem_limit: 500m
 
   # ============================================================
   # V2 #3: HTTP API (FastAPI on port 8001)
