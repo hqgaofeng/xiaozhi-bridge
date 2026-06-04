@@ -84,13 +84,13 @@ def _detect_model_precision(model_dir: Path) -> tuple[str, dict[str, Path]]:
     {role: file_path}) where role is one of "encoder"/"decoder"/"joiner".
     """
     int8_paths = {role: model_dir / fname for role, fname in zip(
-        ("encoder", "decoder", "joiner"), _MODEL_FILE_GROUPS["int8"]
+        ("encoder", "decoder", "joiner"), _MODEL_FILE_GROUPS["int8"], strict=False
     )}
     if all(p.is_file() for p in int8_paths.values()):
         return "int8", int8_paths
 
     fp32_paths = {role: model_dir / fname for role, fname in zip(
-        ("encoder", "decoder", "joiner"), _MODEL_FILE_GROUPS["fp32"]
+        ("encoder", "decoder", "joiner"), _MODEL_FILE_GROUPS["fp32"], strict=False
     )}
     if all(p.is_file() for p in fp32_paths.values()):
         return "fp32", fp32_paths
@@ -190,15 +190,15 @@ class SherpaOnnxASR(ASRBase):
         # another ASR provider is configured.
         import sherpa_onnx
 
-        kwargs: dict[str, Any] = dict(
-            tokens=str(self.model_dir / _REQUIRED_TOKENS_FILE),
-            encoder=str(paths["encoder"]),
-            decoder=str(paths["decoder"]),
-            joiner=str(paths["joiner"]),
-            num_threads=self.num_threads,
-            decoding_method=self.decoding_method,
-            provider=self.provider,
-        )
+        kwargs: dict[str, Any] = {
+            "tokens": str(self.model_dir / _REQUIRED_TOKENS_FILE),
+            "encoder": str(paths["encoder"]),
+            "decoder": str(paths["decoder"]),
+            "joiner": str(paths["joiner"]),
+            "num_threads": self.num_threads,
+            "decoding_method": self.decoding_method,
+            "provider": self.provider,
+        }
         # Only pass modeling_unit + bpe_vocab if we're using bpe; sherpa-onnx
         # treats an empty bpe_vocab as a different code path that errored
         # in our smoke test.

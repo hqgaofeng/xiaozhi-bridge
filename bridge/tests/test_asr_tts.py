@@ -1,5 +1,9 @@
 """Tests for ASR and TTS abstractions."""
 
+import os
+import wave
+from pathlib import Path
+
 import pytest
 
 from xiaozhi_bridge.asr import ASRError, get_asr, list_asr_providers
@@ -162,11 +166,6 @@ async def test_asr_sherpa_onnx_transcribe_raises_when_model_dir_missing():
 # In CI, these tests skip (no model available). Locally, Allen runs them.
 # The model is NOT committed to the repo (~500MB).
 
-
-import os
-import wave
-import struct
-from pathlib import Path
 
 _PROD_MODEL_DIR = Path(
     "/opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
