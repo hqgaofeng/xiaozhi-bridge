@@ -50,12 +50,14 @@ from __future__ import annotations
 
 import logging
 import struct
+import time
 from pathlib import Path
 from typing import Any
 
+from ..utils.logging import get_logger
 from .base import ASRBase, ASRError, ASRResult, register_asr
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # Files we look for in model_dir. The "fp32" / "int8" suffixes reflect
 # the two precisions sherpa-onnx ships for this model. We auto-detect
@@ -213,9 +215,15 @@ class SherpaOnnxASR(ASRBase):
             self.num_threads,
             self.decoding_method,
         )
+        load_started = time.monotonic()
         self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(**kwargs)
         self._precision = precision
-        log.info("sherpa_onnx model ready")
+        load_ms = (time.monotonic() - load_started) * 1000
+        log.info(
+            "sherpa_onnx model ready",
+            precision=precision,
+            load_ms=round(load_ms, 1),
+        )
 
     async def transcribe(
         self, audio: bytes, sample_rate: int, channels: int = 1
@@ -257,6 +265,7 @@ class SherpaOnnxASR(ASRBase):
         # Streaming decode loop.
         # Pitfall #3 (see module docstring): accept_waveform is non-blocking;
         # we must pull results via decode_stream until is_ready returns False.
+        transcribe_started = time.monotonic()
         stream = self._recognizer.create_stream()
         stream.accept_waveform(float(sample_rate), float_samples)
         stream.input_finished()
@@ -267,10 +276,25 @@ class SherpaOnnxASR(ASRBase):
             self._recognizer.decode_stream(stream)
         result = self._recognizer.get_result_all(stream)
         text = (result.text or "").strip()
+        transcribe_ms = (time.monotonic() - transcribe_started) * 1000
+        audio_duration_ms = int(n_samples / sample_rate * 1000)
+
+        # Log every transcribe so we can spot regressions / slow
+        # inference in production. The text length is bounded for
+        # log volume control — sherpa can output up to a few hundred
+        # characters, but we don't want to dump 10kB into stdout.
+        log.info(
+            "sherpa_onnx transcribed",
+            audio_duration_ms=audio_duration_ms,
+            transcribe_ms=round(transcribe_ms, 1),
+            rtf=round(transcribe_ms / max(audio_duration_ms, 1), 3),
+            text_len=len(text),
+            text_preview=text[:40] if text else "",
+        )
 
         return ASRResult(
             text=text,
             confidence=1.0,  # sherpa_onnx streaming doesn't expose per-token conf
             language="zh",  # bilingual model is zh+en; default to zh
-            duration_ms=int(len(audio) / 2 / sample_rate * 1000),
+            duration_ms=audio_duration_ms,
         )
