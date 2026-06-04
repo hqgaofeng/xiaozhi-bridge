@@ -269,6 +269,26 @@ conversation row in sqlite`（V2 #4 之后）。
 python scripts/v2_1_asr_smoke.py
 ```
 
+**V2 #2 edge-tts smoke**：v0.2.3 不需要新脚本。`v2_1_asr_smoke.py`
+已覆盖 TTS 链路（V1 时代起就用过 mock TTS 跑过），edge-tts 改
+默认与否仅影响 TTS 实际声音。在你 flip `config.yaml` 到
+`provider: edge` 之前，prod TTS 仍是 mock。**V2 #2.1 (egress 修复) 后**，
+要补一个 `scripts/v2_2_tts_smoke.py` 验声音 + server log 有
+`edge_tts_synthesis_done` 事件。
+
+**V2 #2 (edge-tts) 部署检查表**：
+
+- [ ] `config/config.yaml`：`tts.provider` 仍为 `mock`（默认）
+- [ ] VPS host iptables：`FORWARD` 链验证允许 docker bridge
+  egress（v0.2.3 部署时实测是被默认 DROP 拦截，**别 flip 默认**）
+- [ ] `bridge` 镜像 ffmpeg 验证（V1 装的，V2 #2 复用）：
+  `docker exec xiaozhi-bridge ffmpeg -version | head -1`
+- [ ] **V2 #2.1**（egress 修复后）：改 `tts.provider: edge`，
+  重启 bridge，跑 `v2_1_asr_smoke.py` 验证 server log 有
+  `edge_tts_synthesis_start/done` 事件
+- [ ] **V2 #2.1**（egress 修复后）：在容器内 `python3 -c "import
+  edge_tts; ..."` 跑连接性 spot-check
+
 预期输出类似：
 ```
 v2-1-asr: 163200 bytes PCM → 85 Opus frames @ 60ms

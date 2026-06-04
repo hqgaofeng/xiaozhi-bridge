@@ -4,6 +4,98 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.3] - 2026-06-04
+
+### V2 #2 real TTS (edge-tts, Microsoft neural voices, free cloud TTS)
+
+**The headline change of this release**: 首个真 TTS provider 上线。
+`bridge/src/xiaozhi_bridge/tts/edge.py` (~280 行) 用 Microsoft Edge TTS
+（免费、无需 API key、`zh-CN-XiaoxiaoNeural` / `en-US-JennyNeural` 等
+神经语音），流式 mp3 → pydub (ffmpeg) 解码 → PCM int16 mono 24kHz
+→ 60ms chunk。跟 V2 #1 抽象同源（`@register_tts("edge")`）。
+
+**TTS providers 现状** (v0.2.3)：
+
+- `mock` (V1，默认未变) — 返静默/音调，V2 #2 仍为默认。
+- `edge` (V2 #2) — Microsoft Edge TTS via `edge-tts` + pydub。已实现，
+  需 VPS docker egress 通 `speech.platform.bing.com:443`（v0.2.3
+  部署时未通，保留为 opt-in 切换；修复后改默认）。
+- `cloud` (V2 #1 骨架) — `aliyun_tts` / `volcengine_tts` /
+  `gpt_sovits` 接入点预留。
+
+**Why edge-tts** (V2 #2 选型): VPS 961MiB RAM / 1G swap，V2 #1
+sherpa-onnx ASR 已吃 200-300MiB。SherpaOnnxTTS 再装 200-400MB
+模型会顶到 500MiB limit；edge-tts 是流式网络调用，几乎不占 RAM
++ 0 磁盘。Microsoft 神经语音质量又高于 sherpa-onnx VITS。
+V2 #2 也保留了 `cloud` 抽象（`@register_tts("cloud")` + 预留
+`vendor: aliyun/volcengine/...`），未来加火山/阿里云/SherpaOnnxTTS
+不需改协议/配置。
+
+**Architecture** (mp3 → PCM 流式解码)：
+
+1. `edge_tts.Communicate(text, voice, ...).stream()` 是 async
+   generator，产 `audio` (mp3 bytes) + `SentenceBoundary` 事件。
+2. provider 按句缓冲 mp3 到 `io.BytesIO`；遇 `SentenceBoundary` 触发
+   flush。
+3. `pydub.AudioSegment.from_mp3(buf).set_channels(1).set_frame_rate(
+   24000).set_sample_width(2)` 在 `asyncio.to_thread` 里执行（pydub
+   调 ffmpeg 是阻塞 subprocess）。
+4. 切 60ms PCM chunk → `yield TTSChunk(pcm, text, is_first, is_last)`。
+5. `is_first` 仅在首句首个 chunk；`is_last` 仅在末句末个 chunk；
+   中间 chunk 都默认 False。这跟 `TTSBase` 抽象合同一致。
+
+**关键坑**（已记到 `tts/edge.py` docstring，下次新接 TTS 必读）：
+
+1. `edge-tts` 强制出 mp3 stream，**不支持直接产 PCM/WAV**。
+   mp3 → PCM 必须经 ffmpeg（pydub 是 ffmpeg 的 Python 包装）。
+2. **ffmpeg 已装在 bridge/Dockerfile**（V1 阶段为 mock TTS mp3 路径
+   装的；V2 #2 复用，**不增加镜像层**）。
+3. edge-tts 需要出口到 `speech.platform.bing.com:443`（WebSocket）。
+   VPS docker bridge network 默认 FORWARD 策略可能拒 egress
+   （v0.2.3 部署时实测 10s connect timeout；这是 VPS infra 问题，
+   不属 V2 #2 范围，单独 PR 修）。
+4. pydub 不只调 `ffmpeg`，**还调 `ffprobe`**（Python 3.12 起
+   `audioop` deprecation warning 也会出现，可忽略）。
+5. `edge-tts` 内部用 aiohttp，**默认 IPv6 first**。VPS 无 IPv6
+   egress 时需 socket layer 强制 v4（aiohttp 没现成开关，目前
+   通过 edge-tts 默认 retry 机制吸收；后续若 IPv4 也拒，会再
+   单独处理）。
+
+**V0.2.3 默认不变**：tts.provider 仍为 `mock`，edge-tts 仅
+opt-in 可用。**这是 v0.2.3 跟 v0.2.2 唯一的用户感知差异**——
+新增一个 provider 名字 + 配置选项，不改链路。
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/tts/edge.py` (281 行) — `EdgeTTS`
+  class + `_decode_mp3_to_pcm` 同步助手。 完整 docstring 覆盖
+  架构 / 并发 / 配置 / 4 条坑（跟 V2 #1 sherpa_onnx.py 同模式）。
+- `bridge/tests/test_tts_edge.py` (158 行) — 6 个 unit 测试
+  (always run, CI 跑) + 4 个 e2e 测试 (`XIAOZHI_TEST_EDGE_TTS=1`
+  启用，需要 ffmpeg + 公网)。
+  Unit 覆盖：registry / config 校验 / 边界 / 空文本 / 无效
+  sample_rate。E2E 覆盖：中文 / 英文 / 多句 / wav 可写性。
+- `bridge/src/xiaozhi_bridge/tts/__init__.py` — import edge，
+  更新 "Registered providers" 注释。
+- `bridge/pyproject.toml` — `edge-tts>=6.1` + `pydub>=0.25` 加
+  到 dependencies。`bridge/uv.lock` 重新生成。
+- `bridge/Dockerfile` — **无改动**（ffmpeg 早就在了，V1 阶段
+  为别的路径装的；V2 #2 复用）。
+
+**Test**：
+
+- 56 passed, 6 skipped (CI 4/4 绿 @ fecdda9)。
+  4 个 skip = edge-tts e2e (env-gated)；
+  2 个 skip = sherpa-onnx 真模型 + openclaw live（V2 #1 留的）。
+
+**未变**：
+
+- VPS docker-compose.yml（V2 #1 阶段已 bind-mount 模型目录，
+  V2 #2 不需新挂载）。
+- `config/config.yaml` 默认 `tts.provider: mock` 不变（避免
+  部署炸；edge 默认 flip 留到 egress 修复后）。
+- 协议层 / HTTP API（V2 #2 走 V2 #1 立的 `TTSBase` 抽象）。
+
 ## [0.2.2] - 2026-06-04
 
 ### V2 #1 real ASR (sherpa-onnx, bilingual zh+en, local CPU)

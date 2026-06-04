@@ -132,15 +132,26 @@ class TTSBase(Protocol):
     async def synthesize_stream(self, text: str, sample_rate: int = 24000) -> AsyncIterator[TTSChunk]: ...
 ```
 
-**Provider 注册表**（V2 #1 顺手定骨架，v0.2.2）：
+**Provider 注册表**（v0.2.3 更新）：
 
 | Provider | 文件 | 状态 | 说明 |
 |---|---|---|---|
-| `mock` | `mock.py` | V1 | 生成 silence 或 440Hz tone，文本长度驱动时长 |
-| `cloud` | `cloud.py` | 骨架（未实现） | 为 edge-tts/Aliyun SAMI/Volcengine/GPT-SoVITS 预留 |
+| `mock` | `mock.py` | V1，默认未变 | 生成 silence 或 440Hz tone，文本长度驱动时长 |
+| `edge` | `edge.py` | **V2 #2 已实现** | Microsoft Edge TTS via `edge-tts` + pydub/ffmpeg mp3→PCM |
+| `cloud` | `cloud.py` | 骨架（未实现） | 为 aliyun_tts/volcengine_tts/gpt_sovits 预留 |
+
+**V2 #2 edge-tts 实现要点**（详细见 `tts/edge.py` docstring）：
+
+- 入口：`edge_tts.Communicate(text, voice, rate, volume, pitch, boundary="SentenceBoundary").stream()`
+- 流式事件：`audio` (mp3 bytes) + `SentenceBoundary` (text + offset + duration)
+- 架构：按句缓冲 mp3 → `asyncio.to_thread(_decode_mp3_to_pcm)` (pydub+ffmpeg 阻塞)
+  → PCM int16 mono 24kHz → 60ms chunk → `yield TTSChunk(pcm, text, is_first, is_last)`
+- 端口/代理：依赖出网到 `speech.platform.bing.com:443`（WebSocket）。
+  v0.2.3 部署时 VPS docker egress 被 FORWARD 默认 DROP 拦截，
+  需单独修 iptables 后才能切为默认（不影响实现本身）
+- 质量：Microsoft 神经语音，zh-CN-XiaoxiaoNeural（中文）/en-US-JennyNeural（英文）
 
 - `base.py`：接口定义 + 注册表
-- 真 TTS 实现（edge-tts / Aliyun / Volcengine / GPT-SoVITS）—— **V2 #2 计划中**
 
 #### 3.1.5 LLM 客户端 (`llm/openclaw.py`)
 
@@ -421,10 +432,10 @@ server {
 
 ## 7. V2 / V3 TODO（12 个候选）
 
-按推荐顺序，**V2 #1 真 ASR 已完成**（V0.2.2）：
+按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts provider**（V0.2.3，opt-in）已完成：
 
 1. ✅ **真 ASR**（sherpa-onnx 本地 / V2 #X 阿里云）—— V2 #1 默认走 sherpa-onnx
-2. **真 TTS**（edge-tts / 火山引擎 / GPT-SoVITS）—— V2 #2 计划
+2. ✅ **真 TTS edge-tts**（edge-tts / V2 #2 火山引擎 / GPT-SoVITS 后续）—— V2 #2 edge-tts 已实现为 opt-in provider；VPS egress 修复后 flip 默认
 3. ✅ FastAPI HTTP API（`/api/devices`、`/api/conversations`、`/api/iot`、`/api/config`、`/api/logs/stream`）—— V2 #3 v0.2.0
 4. ✅ SQLite 对话持久化 —— V2 #4 v0.2.1
 5. ✅ 智控台接真数据（调 `/api/`）—— V2 #5 web 0.2.0

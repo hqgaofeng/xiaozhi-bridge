@@ -112,9 +112,15 @@ asr:
 
 TTS provider 配置（可插拔）。
 
+| Provider | 状态 | 何时可切默认 |
+|---|---|---|
+| `mock` | V1 默认，返静默/音调 | 始终 |
+| `edge` | V2 #2 实现，需 VPS egress 通 `speech.platform.bing.com:443` | 需先修 iptables FORWARD |
+| `cloud` | V2 #1 骨架 | 未实现 |
+
 ```yaml
 tts:
-  provider: mock         # 当前：mock；可扩展：edge、sherpa_onnx
+  provider: mock         # 默认 mock；opt-in 切到 edge 需 egress 通
   voice: zh-CN-XiaoxiaoNeural   # 语音 ID
   rate: "+0%"                    # 语速
   volume: "+0%"                  # 音量
@@ -122,6 +128,30 @@ tts:
     mode: silence        # silence | tone
     chunk_ms: 60
 ```
+
+**V2 #2 edge-tts 配置示例**（opt-in）：
+
+```yaml
+tts:
+  provider: edge
+  voice: zh-CN-XiaoxiaoNeural    # 默认；其他：en-US-JennyNeural, zh-CN-YunxiNeural
+  rate: "+0%"                    # "-10%"~"+50%"
+  volume: "+0%"
+  pitch: "+0Hz"                  # 罕见调
+  options:
+    chunk_ms: 60                 # PCM chunk 大小（ms）
+    boundary: SentenceBoundary   # 或 WordBoundary
+    connect_timeout: 10          # WebSocket connect timeout (s)
+    receive_timeout: 60          # WebSocket receive timeout (s)
+```
+
+**依赖**：V2 #2 加了 `edge-tts` + `pydub` pip 包。`bridge/Dockerfile`
+已装 `ffmpeg`（V1 阶段为 mock TTS mp3 路径装的，V2 #2 复用，**不增加镜像层**）。
+pydub 是 ffmpeg 的 Python 包装。
+
+**部署前提**：VPS 容器需出口通 `speech.platform.bing.com:443`。
+v0.2.3 部署时实测 docker bridge network 的 FORWARD 默认拒 egress，
+需 host iptables 修复后才能切默认（实现本身已就绪，不受网络限制）。
 
 ### device
 
