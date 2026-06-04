@@ -391,6 +391,48 @@ docker compose logs bridge
 - 看 nginx 反代是否转发到 web 5180：`curl -I http://127.0.0.1:5180`（应 200）
 - 浏览器 DevTools 看 Network（应看到 `/` 返回 200 + JS bundle）
 
+### 8.5 容器 egress 不通（V2 #2.1 修复后已解决）
+
+**症状**：`docker exec <c> sh -c "python3 -c 'import socket;
+s.connect(('1.1.1.1', 443))'"` 返 `TimeoutError`，但 host
+`curl https://1.1.1.1` 是通的。`edge-tts` / Aliyun / 任何
+需公网的 provider 都连接超时。
+
+**根因**：VPS host iptables `FORWARD policy DROP` + POSTROUTING
+`MASQUERADE` 只 cover 默认 `docker0` (172.17.0.0/16)。 docker
+compose 创建的 custom bridge（如 `xiaozhi-bridge_default`
+→ `br-de22cc47a0c1`）在 172.19.0.0/16，**两个 layer 都不匹配**。
+
+**V2 #2.1 修复**（host root 手动跑一次，**不持久化**）：
+
+```bash
+# 1. 备份现状
+sudo iptables-save > /tmp/iptables.bak.$(date +%F)
+
+# 2. 看 bridge 容器实际 bridge 名
+docker inspect <container> | python3 -c \
+  "import json,sys; print(list(json.load(sys.stdin)[0]['NetworkSettings']['Networks'].keys()))"
+# 比如输出 ['xiaozhi-bridge_default']，bridge 名是 br-<network-id 前 12 位>
+
+# 3. 加 FORWARD ACCEPT（具体 bridge iface）
+sudo iptables -I FORWARD 1 -i br-de22cc47a0c1 -j ACCEPT
+
+# 4. 加 POSTROUTING MASQUERADE（具体 subnet）
+sudo iptables -t nat -I POSTROUTING 1 -s 172.19.0.0/16 ! -o docker0 -j MASQUERADE
+
+# 5. 验证
+docker exec <container> sh -c \
+  "python3 -c 'import socket; s=socket.socket(); s.settimeout(5); s.connect((\"1.1.1.1\", 443)); print(\"OK\")'"
+# 应输出 OK
+```
+
+**持久化**（host root）：重启用 `iptables-save` + `iptables-restore`。
+v0.2.4 不动这层（**单提 Issue/PR** 跟踪）。Racknerd VPS 推荐
+装 `iptables-persistent` apt 包。
+
+**相关 commit**：v0.2.4 是部署默认 flip，iptables 修改本身
+**不在 git 里**。
+
 ## 9. 生产优化建议
 
 ### 9.1 持久化日志

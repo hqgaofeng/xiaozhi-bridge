@@ -72,16 +72,22 @@ asr:
     # provider: cpu
 
 # TTS provider (pluggable)
-# V1 supports: mock
+# V1: mock
+# V2 #2 (v0.2.3) added: edge (Microsoft neural voices via edge-tts + pydub/ffmpeg)
+# V2 #2.1 (v0.2.4) flipless: edge is the default in production
+# To go back to mock: change provider to "mock" and set options.mode
 tts:
-  provider: mock
-  voice: zh-CN-XiaoxiaoNeural
-  rate: "+0%"
-  volume: "+0%"
+  provider: edge
+  voice: zh-CN-XiaoxiaoNeural    # edge-tts voice ID (zh: XiaoxiaoNeural/YunxiNeural/YunyangNeural; en: JennyNeural/GuyNeural)
+  rate: "+0%"                    # speech rate: -50% ~ +100%
+  volume: "+0%"                  # loudness: -50% ~ +50%
+  pitch: "+0Hz"                  # pitch shift: -50Hz ~ +50Hz
   options:
-    # Mock-specific config
-    mode: silence        # "silence" | "tone"
-    chunk_ms: 60
+    # Edge-tts-specific config
+    chunk_ms: 60                 # PCM chunk size to yield (ms)
+    boundary: SentenceBoundary   # or WordBoundary (finer but smaller chunks)
+    connect_timeout: 10          # WebSocket connect timeout (s)
+    receive_timeout: 60          # WebSocket receive timeout (s)
 
 # Device / session
 device:

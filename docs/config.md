@@ -110,23 +110,25 @@ asr:
 
 ### tts
 
-TTS provider 配置（可插拔）。
+TTS provider 配置（可插拔）。 **v0.2.4 默认 `edge`**（V2 #2.1 修复 VPS egress 后 flip）。
 
 | Provider | 状态 | 何时可切默认 |
 |---|---|---|
-| `mock` | V1 默认，返静默/音调 | 始终 |
-| `edge` | V2 #2 实现，需 VPS egress 通 `speech.platform.bing.com:443` | 需先修 iptables FORWARD |
+| `mock` | V1，返静默/音调 | 始终（V2 #2 改前默认） |
+| `edge` | V2 #2 实现，V2 #2.1 修 egress 后 v0.2.4 默认 | **v0.2.4+ 默认** |
 | `cloud` | V2 #1 骨架 | 未实现 |
 
 ```yaml
 tts:
-  provider: mock         # 默认 mock；opt-in 切到 edge 需 egress 通
+  provider: edge         # v0.2.4 默认
   voice: zh-CN-XiaoxiaoNeural   # 语音 ID
   rate: "+0%"                    # 语速
   volume: "+0%"                  # 音量
   options:
-    mode: silence        # silence | tone
-    chunk_ms: 60
+    chunk_ms: 60        # PCM chunk 大小（ms）
+    boundary: SentenceBoundary  # 或 WordBoundary
+    connect_timeout: 10  # edge-tts WS connect timeout (s)
+    receive_timeout: 60  # edge-tts WS receive timeout (s)
 ```
 
 **V2 #2 edge-tts 配置示例**（opt-in）：

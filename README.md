@@ -24,6 +24,7 @@
 | **V2 #5** | web 0.2.0 | 2026-06-03 | 智控台接真数据 | 5 个 page 全部从 hardcoded mock 改为 `fetch /api/*`；新增 `useApi<T>()` hook；修 Vite dev proxy target (8000→8001) |
 | **V2 #1** | v0.2.2 | 2026-06-04 | 真 ASR | sherpa-onnx 本地 streaming Zipformer（双语 zh+en），CPU 推理；首 transcribe 才 lazy load；fp32/int8 自动检测；+17 单测；prod live e2e 验过 |
 | **V2 #2** | v0.2.3 | 2026-06-04 | 真 TTS provider | edge-tts (Microsoft 神经语音，zh/en)；流式 mp3→pydub (ffmpeg)→PCM int16 24kHz；+10 单测 (6 unit + 4 env-gated e2e)；VPS egress 未通，默认仍为 mock |
+| **V2 #2.1** | v0.2.4 | 2026-06-04 | flip edge 默认 | VPS host iptables 修 2 处（FORWARD ACCEPT + POSTROUTING MASQUERADE for bridge subnet）；tts.provider 默认 mock→edge；prod live 验 edge_tts_synthesis_done + tts.stop + db 写入 |
 
 ### 🧪 端到端实测
 
@@ -35,13 +36,14 @@
 | 自动化 e2e | `scripts/e2e_smoke.py`（5 cases：3 esp32-001 + 2 无 header） | 5/5 landed，db 写入正确，unknown 桶工作 |
 | 真 ASR 端到端 | `scripts/v2_1_asr_smoke.py`（5.1s 真中文 wav → 公网 wss → LLM+TTS） | sherpa-onnx 转写存进 db，tts.stop 收到，prod live 验过 |
 | 真 TTS 实现验证 | v0.2.3 容器内 `pydub.AudioSegment.from_mp3` mp3→pcm decode 验过；edge-tts 6 unit + 4 e2e (env-gated) 单元测试 | 实现完整；VPS docker egress 被 FORWARD 拒，flip 默认留到 V2 #2.1 |
+| 真 TTS 端到端 | v0.2.4 `scripts/v2_1_asr_smoke.py`（5.1s 中文 wav → 公网 wss） | edge_tts_synthesis_start/done (chunks=257, 4.4s, zh-CN-XiaoxiaoNeural) + tts.stop 收到 + db 写入新 session |
 
 ### 🚧 V2 路线图（12 项）
 
 | # | 主题 | 状态 |
 |---|---|---|
 | 1 | 真 ASR（sherpa-onnx / 阿里云） | ✅ v0.2.2 |
-| 2 | 真 TTS（edge-tts / 火山 / GPT-SoVITS） | ✅ v0.2.3 (edge-tts opt-in; egress 修复后 flip 默认) |
+| 2 | 真 TTS（edge-tts / 火山 / GPT-SoVITS） | ✅ v0.2.4 (edge-tts 默认) |
 | 3 | FastAPI HTTP API | ✅ v0.2.0 |
 | 4 | SQLite 对话持久化 | ✅ v0.2.1 |
 | 5 | 智控台接真数据 | ✅ web 0.2.0 |
@@ -53,7 +55,7 @@
 | 11 | RAG | ⏳ |
 | 12 | Prometheus / 告警 / 备份 | ⏳ |
 
-**进度**：6 / 12（V2 #1 + #2 + #3 + #4 + #5 完成；#6 多设备 推荐优先）
+**进度**：6 / 12（V2 #1 + #2 + #2.1 + #3 + #4 + #5 完成；#6 多设备 推荐优先）
 
 ## ✨ 特性
 

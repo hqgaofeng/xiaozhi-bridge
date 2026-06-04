@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="xiaozhi-bridge API",
-        version="0.2.3",
+        version="0.2.4",
         description="HTTP API for the xiaozhi-bridge WebSocket bridge.",
         lifespan=lifespan,
     )
@@ -87,7 +87,7 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"ok": True, "version": "0.2.3"}
+        return {"ok": True, "version": "0.2.4"}
 
     # --- devices ---
 

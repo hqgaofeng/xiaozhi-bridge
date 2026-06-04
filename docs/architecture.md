@@ -432,10 +432,10 @@ server {
 
 ## 7. V2 / V3 TODO（12 个候选）
 
-按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts provider**（V0.2.3，opt-in）已完成：
+按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts**（V0.2.3 实现 / V0.2.4 默认）已完成：
 
 1. ✅ **真 ASR**（sherpa-onnx 本地 / V2 #X 阿里云）—— V2 #1 默认走 sherpa-onnx
-2. ✅ **真 TTS edge-tts**（edge-tts / V2 #2 火山引擎 / GPT-SoVITS 后续）—— V2 #2 edge-tts 已实现为 opt-in provider；VPS egress 修复后 flip 默认
+2. ✅ **真 TTS edge-tts**（edge-tts / V2 #2 火山引擎 / GPT-SoVITS 后续）—— V2 #2 edge-tts 已实现；V2 #2.1 修 VPS egress 后 v0.2.4 翻默认
 3. ✅ FastAPI HTTP API（`/api/devices`、`/api/conversations`、`/api/iot`、`/api/config`、`/api/logs/stream`）—— V2 #3 v0.2.0
 4. ✅ SQLite 对话持久化 —— V2 #4 v0.2.1
 5. ✅ 智控台接真数据（调 `/api/`）—— V2 #5 web 0.2.0

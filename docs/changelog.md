@@ -4,6 +4,54 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.4] - 2026-06-04
+
+### V2 #2.1 flip default: edge-tts is now the production TTS
+
+**The headline change of this release**: `tts.provider` 默认从 `mock`
+**改为 `edge`**。v0.2.3 release 当时 VPS docker bridge network 的
+`FORWARD policy DROP` 拒了所有 egress（V2 #2.1 单独修），现在修完了
+flip 过去。
+
+**VPS iptables 修复**（V2 #2.1 必须改的 2 处）：
+
+- **FORWARD ACCEPT for xiaozhi-bridge bridge**：bridge 容器在
+  `br-de22cc47a0c1`（不是默认 `docker0`），DOCKER-FORWARD chain
+  里只有 `i=docker0` ACCEPT，bridge 容器的出包不匹配。修：手动加
+  `iptables -I FORWARD 1 -i br-de22cc47a0c1 -j ACCEPT` （或
+  `br-+` 模式匹配所有 docker bridge）。
+- **POSTROUTING MASQUERADE for 172.19.0.0/16**：默认的
+  `MASQUERADE 172.17.0.0/16` 只 cover docker0 subnet，bridge
+  容器在 172.19.0.0/16 → SYN 包出 eth0 但 src IP 还是私有 IP，
+  外部不回 SYN-ACK。修：`iptables -t nat -I POSTROUTING 1 \
+  -s 172.19.0.0/16 ! -o docker0 -j MASQUERADE`。
+
+  **这个两层问题在 v0.2.3 没崩只是因为没人 flip edge 默认**。
+  修后验证：容器内 `python3 -c 'import socket; s.connect(("1.1.1.1",
+  443))'` OK + 跑完整 v2_1_asr_smoke 见 `edge_tts_synthesis_done`
+  + `db_row_text` 写入。
+
+**部署时注意**：V2 #2.1 iptables rule **未持久化**（重启会丢）。
+Racknerd VPS 丢 iptables 有两种解法：（1）写个 systemd unit 在
+`network-online.target` 后跑 `iptables-restore < /etc/iptables.rules`；
+（2）装 `iptables-persistent` 包。后者更稳，但会改 host apt 状态，
+所以 v0.2.4 不动这层（**单提 Issue/PR**跟踪持久化）。
+
+**Adds**：
+
+- `config/config.yaml`：tts.provider 默认 `mock` → `edge`。
+- `config/config.example.yaml`：tts provider status table 加
+  "edge 默认" + edge-tts 完整配置示例。
+
+**Not in this commit**：
+
+- **VPS iptables 修复是 host 操作，不在 git 里**——见
+  [docs/deployment-docker.md](deployment-docker.md) "V2 #2.1
+  iptables 修复" 节。
+- iptables 持久化（systemd unit 或 iptables-persistent）——
+  单独 PR 跟踪，避免未拍板影响 host apt 状态。
+- v0.2.4 不需要改协议 / HTTP API / 抽象层；纯部署默认 flip。
+
 ## [0.2.3] - 2026-06-04
 
 ### V2 #2 real TTS (edge-tts, Microsoft neural voices, free cloud TTS)
