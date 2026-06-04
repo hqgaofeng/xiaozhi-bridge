@@ -7,6 +7,9 @@
 > 完整实现见 `bridge/src/xiaozhi_bridge/server.py`（V1） + `bridge/src/xiaozhi_bridge/api/`（V2 #3）。
 >
 > API 进程**独立于** bridge WS 进程，端口 8001。nginx `/api/` → 8001。
+>
+> **v0.2.2 (V2 #1 真 ASR) 不改 HTTP API 路由** —— ASR/TTS provider 切换走 `config/config.yaml`，不影响 `/api/*` 端点。
+> 改动范围仅 `GET /api/health` 的 version 字段（0.2.1 → 0.2.2）。
 
 ## 基础信息
 
