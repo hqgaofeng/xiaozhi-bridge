@@ -87,7 +87,7 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"ok": True, "version": "0.2.5"}
+        return {"ok": True, "version": "0.2.6"}
 
     # --- devices ---
 
@@ -101,6 +101,88 @@ def _register_routes(app: FastAPI) -> None:
         if d is None:
             raise HTTPException(status_code=404, detail="device not found")
         return d
+
+    @app.patch("/api/devices/{device_id}")
+    async def update_device(
+        device_id: str,
+        body: dict,
+        db: BridgeDB = db_dep,
+    ) -> dict:
+        """V2 #6: partial update of friendly metadata.
+
+        Body shape (all keys optional, but at least one required):
+            {"name":  "...", "notes": "...", "room": "..."}
+        Empty string clears the field; omitted key leaves it untouched.
+
+        Returns 200 with the updated device record on success.
+        Returns 404 if the device_id doesn't exist.
+        Returns 422 if the body is empty (a no-op PATCH is almost
+        always a client bug, and surfacing it as 422 is clearer
+        than a silent 200).
+        """
+        # Whitelist accepted keys — reject unknown fields so the
+        # client gets a clear 422 instead of silently dropping them.
+        allowed = {"name", "notes", "room"}
+        bad = set(body) - allowed
+        if bad:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown field(s): {sorted(bad)}; allowed: {sorted(allowed)}",
+            )
+        if not body:
+            raise HTTPException(
+                status_code=422,
+                detail=f"empty PATCH body; provide at least one of {sorted(allowed)}",
+            )
+        # Pydantic isn't required for such a small body shape —
+        # a dict + key whitelist gives the same protection with
+        # less import noise. If the body ever grows past 5 fields
+        # we should switch to a pydantic model.
+        name = body.get("name")
+        notes = body.get("notes")
+        room = body.get("room")
+        ok = await db.update_device(
+            device_id, name=name, notes=notes, room=room
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="device not found")
+        # Re-fetch so the response reflects the persisted state
+        # (and the `name → device_id fallback` in list_devices()
+        # is applied consistently with the list endpoint).
+        d = await db.get_device(device_id)
+        assert d is not None  # we just updated it
+        return d
+
+    @app.delete("/api/devices/{device_id}")
+    async def delete_device(
+        device_id: str, db: BridgeDB = db_dep
+    ) -> dict:
+        """V2 #6: remove a device and cascade its FKs.
+
+        Conversations and sessions for this device get their
+        device_id set to NULL (per FK ON DELETE SET NULL), so
+        /api/conversations still returns them — they're not lost,
+        they just become 'orphan' rows visible via the 'unknown'
+        bucket in /api/devices.
+
+        Returns 200 with {"deleted": device_id} on success.
+        Returns 404 if the device_id didn't exist.
+
+        We intentionally do NOT support deleting the synthetic
+        'unknown' bucket — it's a fallback for firmware that
+        forgot the Device-Id header and removing it would make
+        /api/devices look artificially clean.
+        """
+        if device_id == "unknown":
+            raise HTTPException(
+                status_code=400,
+                detail="the 'unknown' bucket cannot be deleted "
+                "(it's the fallback for missing Device-Id headers)",
+            )
+        ok = await db.delete_device(device_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="device not found")
+        return {"deleted": device_id}
 
     @app.post("/api/devices/{device_id}/reboot")
     async def reboot_device(device_id: str) -> dict:

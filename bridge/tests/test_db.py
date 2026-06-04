@@ -158,3 +158,207 @@ async def test_record_conversation_null_device_is_stored(db: BridgeDB) -> None:
     # And the unknown bucket is queryable.
     unknown_convos = await db.list_conversations(device_id="unknown")
     assert len(unknown_convos) == 1
+
+
+
+# --- V2 #6: device metadata (name/notes/room) ---
+
+
+async def test_upsert_device_creates_row_with_null_metadata(
+    db: BridgeDB,
+) -> None:
+    """V2 #6: a fresh upsert must not invent a name/notes/room.
+
+    The list_devices() fallback (name → device_id) is what
+    surfaces a friendly default to the UI; the DB itself stays
+    sparse so we can distinguish 'never set' from 'set to ""'.
+    """
+    await db.upsert_device("esp32-001")
+    assert db._conn is not None
+    async with db._conn.execute(
+        "SELECT name, notes, room FROM devices WHERE device_id = ?",
+        ("esp32-001",),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row == (None, None, None)
+
+
+async def test_update_device_partial_preserves_other_fields(
+    db: BridgeDB,
+) -> None:
+    """V2 #6: PATCH semantics — only touch what the client sent."""
+    await db.upsert_device("esp32-001")
+    # Set all three first so we can verify only the named one moves.
+    assert await db.update_device(
+        "esp32-001", name="客厅", notes="主控", room="客厅"
+    )
+    # Now update only name; notes & room must survive.
+    assert await db.update_device("esp32-001", name="主卧")
+    d = await db.get_device("esp32-001")
+    assert d is not None
+    assert d["name"] == "主卧"
+    assert d["notes"] == "主控"
+    assert d["room"] == "客厅"
+
+
+async def test_update_device_empty_string_clears_field(
+    db: BridgeDB,
+) -> None:
+    """V2 #6: PATCH with '' explicitly clears the field; the
+    response surfaces it as '' (not the device_id fallback)."""
+    await db.upsert_device("esp32-001")
+    await db.update_device("esp32-001", name="客厅")
+    d_before = await db.get_device("esp32-001")
+    assert d_before is not None and d_before["name"] == "客厅"
+    assert await db.update_device("esp32-001", name="")
+    d = await db.get_device("esp32-001")
+    assert d is not None
+    # '' is the 'cleared' state, not the device_id fallback.
+    assert d["name"] == ""
+
+
+async def test_update_device_no_op_returns_true_if_exists(
+    db: BridgeDB,
+) -> None:
+    """V2 #6: an empty PATCH (caller passed no fields) is a no-op
+    for the row but must still report existence truthfully so
+    the API layer can map 'device not found' → 404."""
+    await db.upsert_device("esp32-001")
+    # Pass nothing — all three are None.
+    assert await db.update_device("esp32-001") is True
+    assert await db.update_device("nonexistent") is False
+
+
+async def test_update_device_missing_returns_false(db: BridgeDB) -> None:
+    await db.upsert_device("esp32-001")
+    assert await db.update_device("esp32-001", name="x") is True
+    assert await db.update_device("ghost", name="x") is False
+
+
+async def test_list_devices_falls_back_to_id_when_name_unset(
+    db: BridgeDB,
+) -> None:
+    """V2 #6 contract: legacy rows from v0.2.0~v0.2.5 have NULL
+    name. The API response must use the device_id as the visible
+    name so existing web clients keep working without a data
+    migration."""
+    await db.upsert_device("esp32-001")
+    devices = await db.list_devices()
+    assert len(devices) == 1
+    # The friendly name is the device_id when the user hasn't
+    # set one (and the DB stores NULL).
+    assert devices[0]["name"] == "esp32-001"
+
+
+async def test_list_devices_returns_metadata_when_set(
+    db: BridgeDB,
+) -> None:
+    await db.upsert_device("esp32-001")
+    await db.update_device(
+        "esp32-001", name="客厅音箱", notes="主控", room="客厅"
+    )
+    devices = await db.list_devices()
+    assert len(devices) == 1
+    d = devices[0]
+    assert d["name"] == "客厅音箱"
+    assert d["notes"] == "主控"
+    assert d["room"] == "客厅"
+
+
+async def test_get_device_sql_lookup(db: BridgeDB) -> None:
+    """V2 #6: get_device goes straight to SQL (no full table
+    scan). Verifies the new WHERE-clause code path returns the
+    right row for a specific id."""
+    await db.upsert_device("esp32-001")
+    await db.upsert_device("esp32-002")
+    d = await db.get_device("esp32-002")
+    assert d is not None
+    assert d["id"] == "esp32-002"
+    d_missing = await db.get_device("nonexistent")
+    assert d_missing is None
+
+
+async def test_delete_device_cascades_conversations_to_null(
+    db: BridgeDB,
+) -> None:
+    """V2 #6: deleting a device must NOT destroy its conversation
+    history. The FK ON DELETE SET NULL on conversations.device_id
+    moves the row to the 'unknown' bucket so /api/conversations
+    still returns it (now grouped under 'unknown')."""
+    await db.open_session("sess-1", device_id="esp32-001")
+    cid = await db.record_conversation(
+        device_id="esp32-001",
+        session_id="sess-1",
+        stt_text="hi",
+        assistant_text="hello",
+    )
+    assert cid > 0
+    assert await db.delete_device("esp32-001") is True
+    # The device row is gone.
+    assert await db.get_device("esp32-001") is None
+    # The conversation still exists, re-parented to NULL.
+    assert db._conn is not None
+    async with db._conn.execute(
+        "SELECT device_id FROM conversations WHERE id = ?", (cid,)
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    assert row[0] is None
+
+
+async def test_delete_device_missing_returns_false(
+    db: BridgeDB,
+) -> None:
+    assert await db.delete_device("ghost") is False
+    # Deleting the same id twice is also False the second time.
+    await db.upsert_device("esp32-001")
+    assert await db.delete_device("esp32-001") is True
+    assert await db.delete_device("esp32-001") is False
+
+
+async def test_migrate_adds_columns_to_legacy_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V2 #6 migration: an existing v0.2.5 db (4 columns, no
+    name/notes/room) must be upgraded in place when connect()
+    is called — no manual SQL needed, no data loss."""
+    import aiosqlite
+
+    db_path = tmp_path / "legacy.db"
+    # Hand-craft a v0.2.5-shaped devices table and a row.
+    async with aiosqlite.connect(db_path) as legacy:
+        await legacy.executescript(
+            "CREATE TABLE devices ("
+            "  device_id TEXT PRIMARY KEY,"
+            "  first_seen REAL NOT NULL,"
+            "  last_seen REAL NOT NULL,"
+            "  auth_token TEXT"
+            ");"
+        )
+        await legacy.execute(
+            "INSERT INTO devices VALUES('esp32-old', 1.0, 2.0, NULL);"
+        )
+        await legacy.commit()
+    # Now point our BridgeDB at the same file and connect.
+    monkeypatch.setenv("XIAOZHI_API__DB_PATH", str(db_path))
+    await reset_db_for_tests()
+    d = BridgeDB()
+    await d.connect()
+    try:
+        # The legacy row must still be there.
+        got = await d.get_device("esp32-old")
+        assert got is not None
+        # The new columns must be present and NULL.
+        assert d._conn is not None
+        async with d._conn.execute(
+            "SELECT name, notes, room FROM devices WHERE device_id = ?",
+            ("esp32-old",),
+        ) as cur:
+            row = await cur.fetchone()
+        assert row == (None, None, None)
+        # And the friendly-name fallback still works on the
+        # legacy row.
+        assert got["name"] == "esp32-old"
+    finally:
+        await d.close()
+        await reset_db_for_tests()

@@ -4,6 +4,72 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.6] - 2026-06-04
+
+### V2 #6 设备元数据：name/notes/room 编辑 + 删除
+
+**The headline change of this release**：设备从“只有 ID”升级到“有名字
+有房间有备注” + 可删除。
+
+之前 `GET /api/devices` 返的 `name` 字段始终是 `device_id`（`name` 列未
+建），现在名 `/昵称/房间/备注` 3 个 user-friendly 字段在 DB + API +
+web UI 全链路通。
+
+**Adds**：
+
+- **DB schema migration**（`bridge/src/xiaozhi_bridge/api/db.py`）：
+  `devices` 表加 3 列 `name TEXT, notes TEXT, room TEXT`。3 列都可空
+  （遗留行 v0.2.0–v0.2.5 不需数据迁移）。Migration 在 `connect()`
+  末尾跑：`PRAGMA table_info(devices)` → 缺列就 `ALTER TABLE ... ADD
+  COLUMN`，幂等 + 热 db 安全。
+- **API 新增 2 路由**：
+  - `PATCH /api/devices/{id}`：部分更新 `name/notes/room`。空 body /
+    未知字段返 422；device 不存在返 404。
+  - `DELETE /api/devices/{id}`：删设备。`unknown` 设备桶不可删（返 400）。
+    级联 FK `ON DELETE SET NULL`（已存在于 v0.2.0 schema，V2 #6 启用）；
+    对话记录保留，归到“匿名”桶。
+- **API schema 扩**：`GET /api/devices` / `GET /api/devices/{id}` 响应
+  加 `notes` `room` 字段（遗留行返 `""`）。`name` 优先取 `devices.name`，
+  未设时 fallback 到 `device_id`（遗留行 OK）。
+- **web Devices page 改造**（`web/src/pages/Devices.tsx`）：点击设备
+  开**详情 modal**（不直接跳对话），3 个字段 inline 编辑 + 保存
+  + 删除（confirm dialog）+ “对话记录”链接。`unknown` 设备编辑 /
+  删除按钮 disable。列表卡片加 `room` 行（如设了）。
+- **12 个 db 层 + 6 个 api 层单测**（`tests/test_db.py` 12 个 +
+  `tests/test_api.py` 6 个）：包括 legacy-db migration 测试
+  （手挨 v0.2.5-schema DB 文件 → connect() 后列在、遗留行在、
+  fallback name 仍工作）、“空串清空字段”与“未设 fallback”区分
+  （`name is None` vs `name == ''`）、partial-PATCH 不动其他列、
+  DELETE 级联 conversations 到 `NULL` 等。
+
+**为什么不再多写 V2 #6 范围（不属 V2 #6）**：
+
+- **设备注册鉴权**：`devices.auth_token` 列已在（v0.2.0 预留），
+  未启。**V2 #6.1 单独 PR**。
+- **reachability 倒计时计算**：`last_seen` 已在 WS 握手自动 update
+  （v0.2.0 的 `upsert_device` + `open_session` 就在写），`list_devices`
+  已返 `state: idle/listening/.../offline`（无活跃 session = offline）。
+  V2 #6 需重新思考的是“3 分钟前 last_seen 算 online 还是 offline”——
+  **未拍板**（web 现在用 “session 在 = online”），V2 #6.1 一起改。
+- **重命名/删除 UI 上为什么后改**：V2 #5 时留个口子是
+  `web/src/lib/api.ts` 里接好 `/api/devices`，V2 #6 是把详情/编辑/
+  删除三层补齐。
+
+**Verified before commit**（V2 #1 教训 4.3）：
+- `uv run --no-sync ruff check src tests`: All checks passed
+- `uv run --no-sync mypy src`: Success, 32 source files
+- `uv run --no-sync pytest tests/ -q`: **75 passed** (up from 56, +19 V2 #6), 6 skipped
+- `pnpm build`: tsc + vite 都过
+
+**Not in this commit**：
+
+- iptables 修复（V2 #2.1/v0.2.4） + 持久化（V2 #2.2/v0.2.5）不动。
+- 协议层不动（xiaozhi WS handshake 仍不需 Device-Id 头；`unknown` 桶
+  机制保留）。
+- `auth_token` 列不启鉴权（V2 #6.1）。
+- web 版本号未 bump （web `0.2.0` 是 V2 #5 release 时的独立 track，
+  跟 bridge 跨主版本跟踪）。
+
 ## [0.2.5] - 2026-06-04
 
 ### V2 #2.2 iptables 持久化（v0.2.4 部署默认依赖的修复现不丢重启）

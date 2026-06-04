@@ -26,6 +26,7 @@
 | **V2 #2** | v0.2.3 | 2026-06-04 | 真 TTS provider | edge-tts (Microsoft 神经语音，zh/en)；流式 mp3→pydub (ffmpeg)→PCM int16 24kHz；+10 单测 (6 unit + 4 env-gated e2e)；VPS egress 未通，默认仍为 mock |
 | **V2 #2.1** | v0.2.4 | 2026-06-04 | flip edge 默认 | VPS host iptables 修 2 处（FORWARD ACCEPT + POSTROUTING MASQUERADE for bridge subnet）；tts.provider 默认 mock→edge；prod live 验 edge_tts_synthesis_done + tts.stop + db 写入 |
 | **V2 #2.2** | v0.2.5 | 2026-06-04 | iptables 持久化 | systemd `iptables-restore.service` + `scripts/install_iptables_persist.sh`；`After=network-online.target docker.service`；重启 host 不丢 V2 #2.1 修复；不装 iptables-persistent (避免动 host apt) |
+| **V2 #6** | v0.2.6 | 2026-06-04 | 设备元数据 + 多设备 | `devices.name/notes/room` 3 列 + in-place migration (PRAGMA table_info + ADD COLUMN)；`PATCH/DELETE /api/devices/{id}`；web 详情 modal 编辑/删除；19 个新单测 |
 
 ### 🧪 端到端实测
 
@@ -39,6 +40,7 @@
 | 真 TTS 实现验证 | v0.2.3 容器内 `pydub.AudioSegment.from_mp3` mp3→pcm decode 验过；edge-tts 6 unit + 4 e2e (env-gated) 单元测试 | 实现完整；VPS docker egress 被 FORWARD 拒，flip 默认留到 V2 #2.1 |
 | 真 TTS 端到端 | v0.2.4 `scripts/v2_1_asr_smoke.py`（5.1s 中文 wav → 公网 wss） | edge_tts_synthesis_start/done (chunks=257, 4.4s, zh-CN-XiaoxiaoNeural) + tts.stop 收到 + db 写入新 session |
 | iptables 持久化 | v0.2.5 `scripts/install_iptables_persist.sh` 跑过 + `systemctl start iptables-restore` 模拟 boot 后 rule 自动恢复 | FORWARD rule 1+2 + MASQUERADE rule 1 都重新出现 |
+| 设备元数据 PATCH | v0.2.6 `pytest tests/test_api.py -k patch_device` 7 个 case | name/notes/room 独立或组合 PATCH，全返 200；422 on 空 body / 未知字段；404 on 缺失 id |
 
 ### 🚧 V2 路线图（12 项）
 
@@ -57,7 +59,7 @@
 | 11 | RAG | ⏳ |
 | 12 | Prometheus / 告警 / 备份 | ⏳ |
 
-**进度**：6 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 完成；#6 多设备 推荐优先）
+**进度**：7 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 + #6 完成；#7 反向 MCP 推荐优先）
 
 ## ✨ 特性
 
@@ -196,7 +198,7 @@ xiaozhi-bridge/
 │   │   ├── asr/ tts/ llm/ mcp/ protocol/  # V1 模块
 │   │   ├── server.py           # bridge WS 进程，集成写 db
 │   │   └── config.py
-│   └── tests/                  # 84 个测试（27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1 + 10 V2 #2，含 _get_header）
+│   └── tests/                  # 95 个测试（27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1 + 10 V2 #2 + 19 V2 #6，含 _get_header、migration、PATCH/DELETE）
 ├── scripts/                    # 运维工具
 │   ├── e2e_smoke.py            # 5-case live e2e（hell→STT→LLM→TTS→assert db row）
 │   ├── v2_1_asr_smoke.py       # V2 #1 真 ASR 端到端（5.1s 真中文 wav → 公网 wss）

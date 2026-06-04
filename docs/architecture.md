@@ -432,14 +432,14 @@ server {
 
 ## 7. V2 / V3 TODO（12 个候选）
 
-按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts**（V0.2.3 实现 / V0.2.4 默认）/**V2 #2.2 iptables 持久化**（V0.2.5）已完成：
+按推荐顺序，**V2 #1 真 ASR**（V0.2.2）/**V2 #2 真 TTS edge-tts**（V0.2.3 实现 / V0.2.4 默认）/**V2 #2.2 iptables 持久化**（V0.2.5）/**V2 #6 设备元数据 + 多设备管理**（V0.2.6）已完成：
 
 1. ✅ **真 ASR**（sherpa-onnx 本地 / V2 #X 阿里云）—— V2 #1 默认走 sherpa-onnx
 2. ✅ **真 TTS edge-tts**（edge-tts / V2 #2 火山引擎 / GPT-SoVITS 后续）—— V2 #2 edge-tts 已实现；V2 #2.1 修 VPS egress 后 v0.2.4 翻默认；V2 #2.2 systemd iptables-restore.service 让 v0.2.4 持久化
 3. ✅ FastAPI HTTP API（`/api/devices`、`/api/conversations`、`/api/iot`、`/api/config`、`/api/logs/stream`）—— V2 #3 v0.2.0
 4. ✅ SQLite 对话持久化 —— V2 #4 v0.2.1
 5. ✅ 智控台接真数据（调 `/api/`）—— V2 #5 web 0.2.0
-6. **多设备管理**（设备 ID 路由 + 设备表）—— V2 #6 计划
+6. ✅ **多设备管理**（设备 ID 路由 + 设备表）—— V2 #6 v0.2.6：`devices.name/notes/room` 3 列 + migration + `PATCH/DELETE /api/devices/{id}` + web 详情 modal 编辑/删除
 7. **反向 MCP**（openclaw 主动调 ESP32 上的传感器/动作）
 8. **OTA 固件更新**
 9. **MQTT 协议支持**

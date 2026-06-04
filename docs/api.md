@@ -10,6 +10,8 @@
 >
 > **v0.2.2 (V2 #1 真 ASR) 不改 HTTP API 路由** —— ASR/TTS provider 切换走 `config/config.yaml`，不影响 `/api/*` 端点。
 > 改动范围仅 `GET /api/health` 的 version 字段（0.2.1 → 0.2.2）。
+>
+> **v0.2.6 (V2 #6 设备元数据) 新增 2 个路由**：`PATCH /api/devices/{id}` + `DELETE /api/devices/{id}`。GET `/api/devices` 返字段扩 `notes/room`。
 
 ## 基础信息
 
@@ -34,6 +36,8 @@
 | `GET` | `/api/devices` | 列出所有设备（联接活跃 session） | ✅ |
 | `GET` | `/api/devices/{id}` | 设备详情 | ✅ 200 / 404 |
 | `GET` | `/api/devices/{id}/conversations` | 单设备对话列表（?limit=1..500） | ✅ V2 #4 新增 |
+| `PATCH` | `/api/devices/{id}` | 改 name/notes/room（部分更新） | ✅ V2 #6 新增 |
+| `DELETE` | `/api/devices/{id}` | 删设备（级联 FK ON DELETE SET NULL） | ✅ V2 #6 新增 |
 | `POST` | `/api/devices/{id}/reboot` | 重启设备 | ⏳ 501（V2 接入 WS abort） |
 
 #### `GET /api/devices`
@@ -45,6 +49,8 @@
     "id": "esp32-001",
     "name": "esp32-001",
     "mac": "esp32-001",
+    "notes": "",
+    "room": "",
     "state": "idle",
     "lastSeen": 1780480757.29,
     "sessionId": "xiaozhi-6b5bcb3b9d93"
@@ -52,9 +58,40 @@
 ]
 ```
 
+> V2 #6：响应扩 `notes` `room` 两字段（user-friendly metadata）。
+> 遗留库（v0.2.5 及以前）的行 `notes` `room` 为 NULL，接口返 `""`。
+> `name` 优先取 `devices.name`，未设时 fallback 到 `device_id`。
+> `unknown` 设备桶的 `name` 也是 `unknown`（不改）。
+
 > V2 #4：`id` 为 `"unknown"` 是合成设备，表示 firmware 未发
 > `Device-Id` header。所有这种“匿名”会话都会进这个桶，智控台
 > 可以看到 并查证是否为 ESP32 固件 bug。
+
+#### `PATCH /api/devices/{id}` (V2 #6)
+
+部分更新 `name` `notes` `room` 任意子集。**必须至少传 1 个字段**。
+空 body 返 422，未知字段返 422。
+
+请求：
+```json
+{ "name": "客厅音箱", "room": "客厅" }
+```
+
+响应 200：返刷新后的设备记录（同 `GET /api/devices/{id}` schema）。
+响应 404：device_id 不存在。
+响应 422：空 body 或未知字段。
+
+> `name` 设为 `""` 明确清空（DB 存 `''`）；`GET /api/devices` 返 `name` 仍
+> fallback 到 `device_id`（区分 “未设” 与 “显式空”）。
+
+#### `DELETE /api/devices/{id}` (V2 #6)
+
+删设备，级联 sessions / conversations 调 `device_id` 为 `NULL`
+（FK `ON DELETE SET NULL`，**对话记录不丢**）。
+
+响应 200：`{"deleted": "esp32-001"}`
+响应 400：`id = "unknown"`（系统保留的匿名桶，不可删）。
+响应 404：device_id 不存在。
 
 ### Conversations 对话
 

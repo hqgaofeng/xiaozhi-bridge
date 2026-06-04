@@ -11,9 +11,22 @@ export interface Device {
   id: string
   name: string
   mac: string
+  // V2 #6: user-friendly metadata, edited from the Devices page
+  // detail modal. Backend stores NULL for legacy rows and the
+  // API surfaces them as ''; we keep them as optional so an
+  // older backend (v0.2.0~v0.2.5) doesn't break the UI.
+  notes?: string
+  room?: string
   state: 'idle' | 'listening' | 'thinking' | 'speaking' | 'offline'
   lastSeen: string
   sessionId?: string
+}
+
+export interface DevicePatch {
+  // All fields optional; backend only touches what's sent.
+  name?: string
+  notes?: string
+  room?: string
 }
 
 export interface Conversation {
@@ -67,6 +80,21 @@ export const api = {
   // --- Devices ---
   listDevices: () => request<Device[]>('/devices'),
   getDevice: (id: string) => request<Device>(`/devices/${id}`),
+  // V2 #6: partial-update metadata. Empty object {} would 422
+  // server-side; the caller is expected to pass at least one
+  // field (the modal disables Save when all fields are empty).
+  patchDevice: (id: string, patch: DevicePatch) =>
+    request<Device>(`/devices/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  // V2 #6: delete the device and cascade its conversations to
+  // the 'unknown' bucket. The detail modal shows a confirm
+  // dialog before calling this.
+  deleteDevice: (id: string) =>
+    request<{ deleted: string }>(`/devices/${id}`, {
+      method: 'DELETE',
+    }),
   rebootDevice: (id: string) => request<void>(`/devices/${id}/reboot`, { method: 'POST' }),
 
   // --- Conversations ---

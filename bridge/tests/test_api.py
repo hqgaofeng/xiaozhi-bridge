@@ -45,7 +45,7 @@ def client(tmp_db: Path) -> TestClient:
 def test_health(client: TestClient) -> None:
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "version": "0.2.5"}
+    assert r.json() == {"ok": True, "version": "0.2.6"}
 
 
 # --- devices (empty by default; populated by integration tests) ---
@@ -198,3 +198,119 @@ def test_config_patch_and_get(client: TestClient) -> None:
 def test_config_patch_empty_body_400(client: TestClient) -> None:
     r = client.patch("/api/config", json={})
     assert r.status_code == 400
+
+
+# --- V2 #6: PATCH /api/devices/{id} (name/notes/room) ---
+
+
+def test_patch_device_renames(client: TestClient) -> None:
+    """V2 #6 happy path: PATCH with one field updates that field
+    and returns the refreshed device record."""
+    # Seed: open a session so a device row exists.
+    # We use the API client which goes through BridgeDB.
+    # First, get an empty list, then create a device by writing
+    # a conversation (open_session is internal; the API doesn't
+    # expose it directly. We hit the db via the singleton).
+    import asyncio
+
+    from xiaozhi_bridge.api.db import get_db
+
+    async def _seed() -> None:
+        db = get_db()
+        await db.open_session("sess-x", device_id="esp32-001")
+
+    asyncio.run(_seed())
+
+    r = client.patch(
+        "/api/devices/esp32-001", json={"name": "客厅音箱"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == "esp32-001"
+    assert body["name"] == "客厅音箱"
+
+
+def test_patch_device_404_when_missing(client: TestClient) -> None:
+    r = client.patch(
+        "/api/devices/ghost", json={"name": "x"}
+    )
+    assert r.status_code == 404
+
+
+def test_patch_device_rejects_unknown_field(client: TestClient) -> None:
+    """V2 #6 contract: 422 on unknown keys so typos surface."""
+    r = client.patch(
+        "/api/devices/esp32-001", json={"color": "blue"}
+    )
+    assert r.status_code == 422
+    assert "color" in r.json()["detail"]
+
+
+def test_patch_device_rejects_empty_body(client: TestClient) -> None:
+    """V2 #6: no fields = almost certainly a bug; 422 is clearer
+    than a silent 200 with no change."""
+    r = client.patch("/api/devices/esp32-001", json={})
+    assert r.status_code == 422
+
+
+def test_patch_device_partial_preserves_other_fields(
+    client: TestClient,
+) -> None:
+    """V2 #6: PATCH semantics — only the sent field changes."""
+    import asyncio
+
+    from xiaozhi_bridge.api.db import get_db
+
+    async def _seed() -> None:
+        db = get_db()
+        await db.open_session("sess-x", device_id="esp32-001")
+        await db.update_device(
+            "esp32-001", name="旧名", notes="重要", room="客厅"
+        )
+
+    asyncio.run(_seed())
+
+    r = client.patch("/api/devices/esp32-001", json={"name": "新名"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "新名"
+    assert body["notes"] == "重要"
+    assert body["room"] == "客厅"
+
+
+# --- V2 #6: DELETE /api/devices/{id} ---
+
+
+def test_delete_device_404_when_missing(client: TestClient) -> None:
+    r = client.delete("/api/devices/ghost")
+    assert r.status_code == 404
+
+
+def test_delete_device_protects_unknown_bucket(
+    client: TestClient,
+) -> None:
+    """V2 #6: the synthetic 'unknown' bucket is a fallback for
+    firmware that forgot the Device-Id header. Deleting it would
+    make /api/devices look artificially clean and is rejected."""
+    r = client.delete("/api/devices/unknown")
+    assert r.status_code == 400
+    assert "unknown" in r.json()["detail"]
+
+
+def test_delete_device_happy_path(client: TestClient) -> None:
+    import asyncio
+
+    from xiaozhi_bridge.api.db import get_db
+
+    async def _seed() -> None:
+        db = get_db()
+        await db.open_session("sess-d", device_id="esp32-002")
+
+    asyncio.run(_seed())
+
+    r = client.delete("/api/devices/esp32-002")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": "esp32-002"}
+    # And the device is actually gone.
+    r2 = client.get("/api/devices/esp32-002")
+    assert r2.status_code == 404

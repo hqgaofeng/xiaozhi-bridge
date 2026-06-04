@@ -38,7 +38,14 @@ CREATE TABLE IF NOT EXISTS devices (
     device_id     TEXT PRIMARY KEY,
     first_seen    REAL NOT NULL,
     last_seen     REAL NOT NULL,
-    auth_token    TEXT
+    auth_token    TEXT,
+    -- V2 #6: user-friendly metadata. All nullable so legacy rows
+    -- (v0.2.0~v0.2.5) and the synthetic 'unknown' bucket read
+    -- cleanly. list_devices() falls back to device_id when name
+    -- is NULL so existing clients keep working.
+    name          TEXT,
+    notes         TEXT,
+    room          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -126,9 +133,40 @@ class BridgeDB:
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.executescript(SCHEMA)
         await self._conn.commit()
+        # V2 #6: light migrations for legacy DBs (v0.2.0~v0.2.5)
+        # that predate the devices.name/notes/room columns. Idempotent
+        # — checks PRAGMA table_info first. SQLite ADD COLUMN is a
+        # metadata-only op, safe to run on a hot db.
+        await self._migrate()
         # Seed a couple of demo IoT devices if the table is empty
         # (lets the admin console have something to show pre-V2).
         await self._seed_demo_iot_if_empty()
+
+    async def _migrate(self) -> None:
+        """Idempotent column adds for legacy DBs (V2 #6).
+
+        Why not a full migration framework (alembic etc.)?
+        We have 1 schema, 1 app, 2 processes (bridge + api). A simple
+        'if column missing, ADD COLUMN' check is enough and keeps the
+        codebase free of alembic.ini / env.py / revision files.
+        """
+        assert self._conn is not None
+        async with self._conn.execute("PRAGMA table_info(devices)") as cur:
+            existing = {row[1] for row in await cur.fetchall()}
+        additions: list[tuple[str, str]] = [
+            ("name", "TEXT"),
+            ("notes", "TEXT"),
+            ("room", "TEXT"),
+        ]
+        for col, decl in additions:
+            if col not in existing:
+                # SQLite forbids DEFAULT for ADD COLUMN of TEXT NOT NULL,
+                # but we want NULLs anyway (legacy rows have no friendly
+                # name; list_devices() falls back to device_id).
+                await self._conn.execute(
+                    f"ALTER TABLE devices ADD COLUMN {col} {decl}"
+                )
+        await self._conn.commit()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -176,9 +214,13 @@ class BridgeDB:
 
     async def list_devices(self) -> list[dict]:
         assert self._conn is not None
-        # Join latest open session for the live state.
+        # Join latest open session for the live state. V2 #6: also
+        # pull name/notes/room so the API surfaces user-friendly
+        # metadata in the response (web reads these for the
+        # Devices page detail card).
         sql = """
         SELECT d.device_id, d.first_seen, d.last_seen,
+               d.name, d.notes, d.room,
                s.session_id, s.last_state, s.created_at
         FROM devices d
         LEFT JOIN (
@@ -191,13 +233,30 @@ class BridgeDB:
         async with self._conn.execute(sql) as cur:
             rows = await cur.fetchall()
         out = []
-        for device_id, _first_seen, last_seen, sid, last_state, _created_at in rows:
+        for row in rows:
+            (
+                device_id,
+                _first_seen,
+                last_seen,
+                name,
+                notes,
+                room,
+                sid,
+                last_state,
+                _created_at,
+            ) = row
             state = "offline" if sid is None else last_state
             out.append(
                 {
                     "id": device_id,
                     "mac": device_id,  # V2: real MAC from header
-                    "name": device_id,  # V2: user-set friendly name
+                    # V2 #6: friendly name falls back to device_id
+                    # when unset (legacy rows from v0.2.0-v0.2.5
+                    # have NULL name; web shows id as a stable
+                    # identity anchor even before the user renames).
+                    "name": name if name is not None else device_id,
+                    "notes": notes or "",
+                    "room": room or "",
                     "state": state,
                     "lastSeen": last_seen,
                     "sessionId": sid,
@@ -206,10 +265,120 @@ class BridgeDB:
         return out
 
     async def get_device(self, device_id: str) -> dict | None:
-        for d in await self.list_devices():
-            if d["id"] == device_id:
-                return d
-        return None
+        # V2 #6: SQL-side WHERE instead of Python-side filter —
+        # O(1) lookup vs O(N) full-table scan. The bridge's
+        # `unknown` synthetic bucket also lives in `devices`, so
+        # this works for it too.
+        assert self._conn is not None
+        sql = """
+        SELECT d.device_id, d.first_seen, d.last_seen,
+               d.name, d.notes, d.room,
+               s.session_id, s.last_state, s.created_at
+        FROM devices d
+        LEFT JOIN (
+            SELECT device_id, session_id, last_state, created_at
+            FROM sessions
+            WHERE closed_at IS NULL
+        ) s ON s.device_id = d.device_id
+        WHERE d.device_id = ?
+        """
+        async with self._conn.execute(sql, (device_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        (
+            dev_id,
+            _first_seen,
+            last_seen,
+            name,
+            notes,
+            room,
+            sid,
+            last_state,
+            _created_at,
+        ) = row
+        state = "offline" if sid is None else last_state
+        return {
+            "id": dev_id,
+            "mac": dev_id,
+            "name": name if name is not None else dev_id,
+            "notes": notes or "",
+            "room": room or "",
+            "state": state,
+            "lastSeen": last_seen,
+            "sessionId": sid,
+        }
+
+    async def update_device(
+        self,
+        device_id: str,
+        name: str | None = None,
+        notes: str | None = None,
+        room: str | None = None,
+    ) -> bool:
+        """V2 #6: partial update of friendly metadata.
+
+        Only fields that are explicitly provided (non-None) are
+        written. Empty string is treated as 'clear the field' (we
+        store '' so list_devices() can distinguish 'unset' from
+        'explicitly blank' — currently both are normalized to ''
+        in the response, but the DB preserves the distinction for
+        future use).
+
+        Returns True if a row was updated, False if the device_id
+        doesn't exist.
+        """
+        assert self._conn is not None
+        # Build dynamic SET clause — only touch columns the caller
+        # actually passed in. This keeps PATCH calls idempotent
+        # and avoids trampling existing values when the client
+        # sends a partial body (web only edits one field at a time).
+        sets: list[str] = []
+        args: list[Any] = []
+        if name is not None:
+            sets.append("name = ?")
+            args.append(name)
+        if notes is not None:
+            sets.append("notes = ?")
+            args.append(notes)
+        if room is not None:
+            sets.append("room = ?")
+            args.append(room)
+        if not sets:
+            # No-op PATCH (e.g. client sent {}). Match HTTP PATCH
+            # semantics: 200 with the unchanged record (we report
+            # 'did it exist' as the return value; route layer
+            # maps False → 404).
+            async with self._conn.execute(
+                "SELECT 1 FROM devices WHERE device_id = ?", (device_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            return row is not None
+        args.append(device_id)
+        cur = await self._conn.execute(
+            f"UPDATE devices SET {', '.join(sets)} WHERE device_id = ?",
+            args,
+        )
+        await self._conn.commit()
+        return cur.rowcount > 0
+
+    async def delete_device(self, device_id: str) -> bool:
+        """V2 #6: remove a device and cascade its conversations /
+        sessions to NULL (per the FK ON DELETE SET NULL clauses
+        in the SCHEMA).
+
+        Returns True if a device row was deleted, False if the
+        device_id didn't exist (route layer maps False → 404).
+        """
+        assert self._conn is not None
+        # PRAGMA foreign_keys=ON is set in connect() so the
+        # ON DELETE SET NULL clauses actually fire. Without it,
+        # SQLite parses the FK clauses but doesn't enforce them.
+        cur = await self._conn.execute(
+            "DELETE FROM devices WHERE device_id = ?", (device_id,)
+        )
+        await self._conn.commit()
+        return cur.rowcount > 0
 
     # --- sessions ---
 
