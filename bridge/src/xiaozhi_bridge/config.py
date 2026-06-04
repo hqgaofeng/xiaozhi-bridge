@@ -112,6 +112,16 @@ class DeviceConfig(BaseSettings):
 
     # Bearer token expected in Authorization header (optional)
     auth_token: str = ""
+    # V2 #6.1: per-device token map. Keys are device_ids; values
+    # are the corresponding bearer tokens. Pydantic-settings
+    # parses env vars like `DEVICE__AUTH_TOKENS__ESP32-001=xxx`
+    # into {"esp32-001": "xxx"} when the values are simple scalars.
+    # For dicts you typically need JSON; we use JSON to be explicit
+    # (see deployment-docker.md for the env-var escape recipe).
+    # When both auth_token and auth_tokens are empty, NO auth is
+    # enforced — preserves the V2 #5 default and the prod
+    # firmware that doesn't send an Authorization header.
+    auth_tokens: dict[str, str] = Field(default_factory=dict)
     # Session ID prefix
     session_id_prefix: str = "xiaozhi"
     # NOTE: echo_mode was removed in v0.1.5 — was a debug flag nobody wired

@@ -94,6 +94,16 @@ device:
   # Optional bearer token for device Authorization header
   # If empty, no auth check
   auth_token: ""
+  # V2 #6.1: per-device token map. When set, takes precedence
+  # over the global auth_token above (and falls back to it if
+  # the device_id isn't listed). Example (3 ESP32s each with
+  # their own token):
+  #   auth_tokens:
+  #     esp32-001: "tok-living-room-xyz"
+  #     esp32-002: "tok-bedroom-abc"
+  #     esp32-003: "tok-kitchen-123"
+  # Empty map + empty auth_token above = no auth (V2 #5 default).
+  auth_tokens: {}
   session_id_prefix: xiaozhi
 
 # MCP / IoT

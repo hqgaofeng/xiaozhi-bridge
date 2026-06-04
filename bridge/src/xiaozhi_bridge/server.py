@@ -48,6 +48,44 @@ log = logging.getLogger(__name__)
 # --- Main server class ---
 
 
+def _check_auth(
+    auth_header: str | None,
+    device_id: str | None,
+    per_device_tokens: dict[str, str],
+    global_token: str,
+) -> bool:
+    """V2 #6.1: validate the Authorization header against the
+    per-device map (if the device_id is listed) or the global
+    token (fallback). Returns True if the connection is allowed.
+
+    Rules (in this order):
+      1. If the device_id is in `per_device_tokens`, the bearer
+         must match that device's token. (Even if the global
+         token is also set, per-device wins for listed devices.)
+      2. Else if a global `global_token` is set, the bearer
+         must match it.
+      3. Else no auth — any connection is allowed (preserves
+         the V2 #5 default so the prod firmware without an
+         Authorization header keeps working).
+
+    Why a pure function (not a method)? It has no I/O and no
+    side effects — easy to unit-test the policy in isolation
+    from the WebSocket handshake flow.
+    """
+    # 1. Per-device lookup.
+    expected = None
+    if device_id and device_id in per_device_tokens:
+        expected = per_device_tokens[device_id]
+    # 2. Global fallback when per-device doesn't apply.
+    elif global_token:
+        expected = global_token
+    # 3. No policy = allow.
+    if not expected:
+        return True
+    # Policy in effect — bearer must match exactly.
+    return auth_header == f"Bearer {expected}"
+
+
 def _get_header(ws: WebSocketServerProtocol, name: str, default: str | None = None) -> str | None:
     """Read a header from a WebSocket connection, supporting the three
     websockets API surfaces that have shipped:
@@ -218,16 +256,26 @@ class XiaozhiBridgeServer:
                 return
 
             # Optional auth check
-            if self.config.device.auth_token:
-                auth = _get_header(ws, "Authorization", "")
-                expected = f"Bearer {self.config.device.auth_token}"
-                if auth != expected:
-                    self.log.warning("handshake.unauthorized", peer=peer)
-                    await ws.close(code=1001, reason="unauthorized")
-                    return
-
-            # Get device id from header
+            # V2 #6.1: per-device token takes precedence over the
+            # legacy single-token config. Empty map + empty
+            # auth_token = no auth enforced (preserves V2 #5 default
+            # so the prod firmware that doesn't send an
+            # Authorization header keeps working).
             device_id = _get_header(ws, "Device-Id")
+            auth_header = _get_header(ws, "Authorization", "")
+            if not _check_auth(
+                auth_header,
+                device_id,
+                self.config.device.auth_tokens,
+                self.config.device.auth_token,
+            ):
+                self.log.warning(
+                    "handshake.unauthorized",
+                    peer=peer,
+                    device_id=device_id,
+                )
+                await ws.close(code=1001, reason="unauthorized")
+                return
 
             # Create session
             session = SessionContext.from_hello(msg, device_id=device_id)

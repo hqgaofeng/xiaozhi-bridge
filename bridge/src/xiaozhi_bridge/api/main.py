@@ -87,7 +87,7 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"ok": True, "version": "0.2.6"}
+        return {"ok": True, "version": "0.2.7"}
 
     # --- devices ---
 

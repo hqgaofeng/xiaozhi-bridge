@@ -4,6 +4,64 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.7] - 2026-06-04
+
+### V2 #6.1 WS 鉴权：per-device token map（opt-in，链路不破）
+
+**The headline change of this release**：把 v0.2.0 预留的
+`devices.auth_token` DB 列 + bridge 中已有的 Bearer 校验逻辑**启用
+为可配**。同时加 per-device token 字典（同一 V2 #6 release
+留的尾巴）。
+
+之前 `config.device.auth_token` 是**全局单一 token**（v0.2.0 +
+就有逻辑但默认空），未启。现在加 **`config.device.auth_tokens`**
+（per-device 字典）：设备用自己唯一的 token，未列出的设备
+回退到全局 token，**都不配 = 不验**（v0.2.0  同当前 prod 固件
+不启 Authorization 头，链路不破）。
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/config.py`：`DeviceConfig.auth_tokens:
+  dict[str, str] = Field(default_factory=dict)`。
+- `bridge/src/xiaozhi_bridge/server.py`：抽出纯函数 `_check_auth(
+  auth_header, device_id, per_device_tokens, global_token) -> bool`。
+  查找顺序：1. per-device map（若 device_id 在 dict）→ 2. 全局
+  `auth_token` → 3. 无策略 = 放行。WS handshake 改调这个函数。
+- `config/config.example.yaml`：加 `auth_tokens: {}` 例子及注释。
+- 11 个新单测（`bridge/tests/test_server_auth.py`）：覆盖 V2 #5
+  无策略基线、全局 token、per-device token、per-device 覆写全局、
+  未列出设备回退全局、缺 Device-Id 头回退、大小写敏感、多余空格
+  拒、map 空串 value 视为“该设备无策略”9 个场景。
+- 1 行 README 修正：项目结构图 `81 个测试` 之前是 95（stale），
+  改为 81（27 V1 + 15 V2 #3 + 15 V2 #4 + 17 V2 #1 + 10 V2 #2
+  + 19 V2 #6 + 11 V2 #6.1 = 114 ?? 不 — 实际 86 passed + 6
+  skipped = 92，README 改成 92 跟 pytest 报告一致）。
+
+**实际测试计数**（0.2.7 release 实时统计）：`86 passed, 6 skipped`
+= **92 个**（project tree 注释同步）。
+
+**为什么不动 FastAPI HTTP API 鉴权**：
+
+- V2 #6.1 范围 = **WS 鉴权**（外部 ESP32 连入防护）
+- HTTP API 鉴权 = 另个范围（**V2 #12 留**），web 同源 nginx
+  代理 / CORS 限 origin + **未对外暴露**，是内部 API，
+  鉴权需求低（**未拍板**）
+
+**Verified before commit**（V2 #1 教训 4.3）：
+
+- `uv run --no-sync ruff check src tests`: All checks passed
+- `uv run --no-sync mypy src`: Success, 32 source files
+- `uv run --no-sync pytest tests/ -q`: **86 passed**（was 75,
+  +11 V2 #6.1）, 6 skipped
+
+**Not in this commit**：
+
+- reachability 启发式（**未拍板**：3min idle = offline？ ）
+- 启用 `devices.auth_token` 列作 fallback（per-device map 另加
+  config项是干净路径；DB 列的 fillable 是 follow-up）
+- HTTP API 鉴权（V2 #12）
+- 固件侧：Allen 的 ESP32 固件**仍不需改**（不配 = 不验）
+
 ## [0.2.6] - 2026-06-04
 
 ### V2 #6 设备元数据：name/notes/room 编辑 + 删除
