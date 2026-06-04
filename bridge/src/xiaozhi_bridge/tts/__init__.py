@@ -3,12 +3,14 @@
 Define a common interface and a registry, so users can swap providers
 (edge-tts, Aliyun SAMI, Volcengine, GPT-SoVITS, etc.) via config.
 
-Registered providers (V2 #1, 2026-06-04):
+Registered providers (V2 #2, 2026-06-04):
   - mock   — silence or 440Hz tone, sized by input text length
-  - cloud  — skeleton for edge/aliyun_tts/volcengine_tts/gpt_sovits. NOT YET IMPLEMENTED.
+  - edge   — Microsoft Edge TTS via the edge-tts Python lib + pydub
+             mp3 → PCM decoder (V2 #2; first real cloud TTS).
+  - cloud  — skeleton for aliyun_tts/volcengine_tts/gpt_sovits. NOT YET IMPLEMENTED.
 """
 
-from . import cloud, mock  # noqa: F401
+from . import cloud, edge, mock  # noqa: F401
 from .base import (
     TTSBase,
     TTSChunk,
