@@ -479,3 +479,91 @@ server {
 ---
 
 详细 API 规范见 [api.md](api.md)，协议细节见 [protocol.md](protocol.md)，配置说明见 [config.md](config.md)。
+
+---
+
+## 7. V2 #11 模块重构（v0.2.13）
+
+### 7.1 设计动机
+
+V0.2.12 时 `server.py` 1124 行，13 个方法塞主类（lifecycle + 业务流水线 + 消息路由 + 音频处理 + MCP + 工具注册 + 工具调度）。这是典型的"主类长期演化"问题，加新功能必读 1000+ 行。
+
+**学**官方 78/xiaozhi-esp32-server 的模块划分（handle/textHandler + ToolManager + per-session MCPClient），做内部代码搬家，不改任何对外接口。
+
+### 7.2 新增模块架构图
+
+```
+xiaozhi_bridge/
+├── server.py                 # 1124 → 664 行（lifecycle only）
+├── main.py                   # 入口
+├── config.py                 # pydantic-settings
+├── asr/                      # ASR providers（不变）
+├── tts/                      # TTS providers（不变）
+├── llm/                      # LLM clients（不变）
+├── vad/                      # VAD providers（不变）
+├── mcp/                      # 🆕 V2 #11a 重构
+│   ├── server.py             # MCP 协议路由
+│   ├── tools.py              # FunctionTool + DeviceToolHandler + _REGISTRY
+│   ├── client.py             # 🆕 MCPClient per-session + asyncio.Lock
+│   ├── manager.py            # 🆕 ToolType + ToolManager + Executors
+│   └── handlers.py           # 🆕 5 个 server.py 方法的 thin shim
+├── handle/                   # 🆕 V2 #11b 整目录
+│   ├── textMessageHandler.py        # 抽象基类
+│   ├── textMessageHandlerRegistry.py # 注册表
+│   ├── textMessageProcessor.py       # 派发器
+│   └── textHandler/                 # 4 个具体 handler
+│       ├── helloMessageHandler.py
+│       ├── listenMessageHandler.py
+│       ├── abortMessageHandler.py
+│       └── mcpMessageHandler.py
+├── pipeline/                 # 🆕 V2 #11c
+│   ├── turn.py               # ASR → LLM tool-use → TTS
+│   └── tts.py                # TTS 串流协议
+├── audio/                    # 🆕 V2 #11c
+│   └── handler.py            # VAD + Opus + wake-grace
+├── protocol/                 # 协议层（不变）
+├── api/                      # HTTP API（不变）
+└── utils/                    # 工具（不变）
+```
+
+### 7.3 核心设计
+
+1. **每消息一个 handler**（handle/）：学官方 78/xiaozhi-esp32-server `textHandler/*.py` 的拆分粒度
+2. **注册表 + 派发器**（textMessageHandlerRegistry + textMessageProcessor）：替换 _main_loop match-case 为 3 行 dispatch
+3. **ToolType 抽象 + ToolManager 派发**（mcp/manager.py）：V2 #7.7 race condition 完整修复蓝图
+4. **MCPClient per-session + asyncio.Lock**（mcp/client.py）：消除全局 _REGISTRY 的 race
+5. **流水线分层**（pipeline/turn + pipeline/tts + audio/handler）：ASR/LLM/TTS 业务代码从 server.py 完全分离
+
+### 7.4 不变量（V2 #11.2 五条）
+
+| 不变量 | 验证方式 |
+|---|---|
+| 协议 0 改 | 165 个回归测试 0 改动（只改 import 路径）|
+| DB 0 改 | api/db.py 0 改动 |
+| 配置 0 改 | config.yaml 0 改动 |
+| API 0 改 | api/main.py 0 改动（除版本号 0.2.12 → 0.2.13）|
+| 依赖 0 改 | pyproject.toml 0 改动（除版本号）|
+
+### 7.5 后期维护铁律
+
+| # | 改什么 | 找哪里 |
+|---|---|---|
+| 1 | 改 ASR | 只改 `asr/` |
+| 2 | 改 TTS | 只改 `tts/` |
+| 3 | 改 LLM | 只改 `llm/` |
+| 4 | 改 MCP 协议 | 只改 `mcp/`（handlers + server + tools）|
+| 5 | 改 ASR→LLM→TTS 流水线 | 只改 `pipeline/` |
+| 6 | 改音频处理 | 只改 `audio/` |
+| 7 | 改 WS 握手 / 主循环 | 只改 `server.py` |
+| 8 | 改消息类型 | 加 `handle/textHandler/XxxMessageHandler` + register |
+| 9 | 改状态机 / 消息 schema | 只改 `protocol/` |
+
+### 7.6 测试
+
+- `tests/test_v2_13_modules.py`：16 个新测（MCPClient 6 + ToolManager 5 + handlers 5）
+- 全套 CI：ruff ✅ mypy ✅ pytest 147 passed + 7 skipped
+
+### 7.7 参考
+
+- [docs/refactor-v2.13-modules.md](refactor-v2.13-modules.md)（30.7KB，12 节 + 2 附录的完整规划）
+- [docs/changelog.md](changelog.md) v0.2.13 段

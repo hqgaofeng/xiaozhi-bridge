@@ -24,23 +24,28 @@ from websockets.legacy.server import WebSocketServerProtocol
 from .asr import get_asr
 from .config import AppConfig
 from .llm import get_llm
-from .llm.base import Message as LLMMessage_
 from .mcp import MCPServer
+from .mcp.handlers import (
+    build_llm_tools_payload,
+    cleanup_session_tools,
+    register_device_tools,
+)
+from .mcp.manager import (
+    DeviceMCPExecutor,
+    FunctionToolExecutor,
+    ToolManager,
+    ToolType,
+)
 from .protocol import (
     AbortMessage,
     HelloMessage,
     ListenMessage,
-    LLMMessage,
     MCPMessage,
     ServerHello,
     SessionContext,
-    SessionState,
-    STTMessage,
-    TTSMessage,
     parse_client_message,
     serialize_server_message,
 )
-from .protocol.audio import make_codec
 from .tts import get_tts
 from .vad import SileroVADProvider
 
@@ -159,6 +164,19 @@ class XiaozhiBridgeServer:
         self.tts = get_tts(config.tts.provider, config.tts.options)
         self.llm = get_llm("openclaw", config.openclaw.model_dump())
         self.mcp = MCPServer()
+
+        # V2 #11a: ToolManager + per-session DeviceMCPExecutor
+        # (replaces the global _REGISTRY + per-call race condition
+        # we found in V2 #7.7 Bug 4). The FunctionTool executor
+        # keeps the global _REGISTRY for now (V1 path, no race).
+        self.tool_manager = ToolManager()
+        self.tool_manager.register_executor(
+            ToolType.FUNCTION, FunctionToolExecutor()
+        )
+        self.device_mcp_executor = DeviceMCPExecutor()
+        self.tool_manager.register_executor(
+            ToolType.DEVICE, self.device_mcp_executor
+        )
 
         # V2 #8.3: server-side VAD (Silero) for esp32 AFE WebRTC VAD
         # mode 0 not triggering voice_stop in real-world conditions.
@@ -354,7 +372,10 @@ class XiaozhiBridgeServer:
             # (see esp32's mcp_server.cc). The future dance: tool __call__
             # awaits the future; the future is resolved in _handle_mcp
             # when the device sends the JSON-RPC response.
-            self._register_device_tools(session, ws)
+            #
+            # V2 #11a: extracted to mcp/handlers.py so the server
+            # file focuses on connection lifecycle.
+            register_device_tools(self, session, ws, self.device_mcp_executor)
 
             # V2 #3: persist to sqlite for the HTTP API
             if self._db is not None:
@@ -399,8 +420,12 @@ class XiaozhiBridgeServer:
                 # stale ws/session closures across reconnects. Until we
                 # move to a per-session MCP server (V2 #7.7), this is
                 # the safest mitigation against cross-session races.
+                #
+                # V2 #11a: extracted to mcp/handlers.py; the old
+                # _cleanup_session_tools is kept as a thin shim for
+                # backward compat with V2 #7 tests.
                 if hasattr(self, "_session_tool_owners"):
-                    self._cleanup_session_tools(session.session_id)
+                    cleanup_session_tools(self, session.session_id)
                 # V2 #7: cancel any pending MCP futures that never got
                 # a response (esp32 disconnected mid-tool-call). This
                 # prevents "Task was destroyed but it is pending" warnings
@@ -418,30 +443,21 @@ class XiaozhiBridgeServer:
         ws: WebSocketServerProtocol,
         session: SessionContext,
     ) -> None:
-        """Main message loop for a connected device."""
+        """Main message loop for a connected device.
+
+        V2 #11b: replaces the V2 #7 match-case dispatch with
+        a registry-based TextMessageProcessor. Adding a new
+        message type = create XxxTextMessageHandler + register.
+        """
+        from .handle import TextMessageProcessor, default_registry
+        processor = TextMessageProcessor(default_registry)
         async for raw in ws:
             if isinstance(raw, bytes):
-                # Audio frame (Opus)
+                # Audio frame (Opus) — not a text message, handled inline
                 await self._handle_audio(ws, session, raw)
             else:
-                # JSON text frame
-                try:
-                    msg = parse_client_message(raw)
-                except (ValueError, json.JSONDecodeError) as e:
-                    self.log.warning("message.invalid", session_id=session.session_id, error=str(e))
-                    continue
-
-                match msg:
-                    case ListenMessage():
-                        await self._handle_listen(ws, session, msg)
-                    case AbortMessage():
-                        await self._handle_abort(ws, session, msg)
-                    case MCPMessage():
-                        await self._handle_mcp(ws, session, msg)
-                    case HelloMessage():
-                        self.log.warning("message.unexpected_hello", session_id=session.session_id)
-                    case _:
-                        self.log.warning("message.unhandled", type=type(msg).__name__)
+                # JSON text frame → dispatch via registry
+                await processor.process_message(self, ws, session, raw)
 
     async def _transition(self, session: SessionContext, new_state) -> None:
         """V2 #3 helper: transition + persist to db (best-effort)."""
@@ -457,65 +473,9 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         opus_frame: bytes,
     ) -> None:
-        """Handle an incoming audio frame.
-
-        V2 #8.3: with server-side VAD (Silero) integrated, we no longer
-        rely on esp32's WebRTC VAD to trigger voice_stop. We:
-
-        1. Decode Opus → PCM
-        2. Run server-side VAD on the PCM
-        3. Cache audio only when VAD says voice (or recent voice)
-        4. When VAD detects voice_stop (1s silence), trigger _process_turn
-
-        The VAD is opt-in: if self.vad is None (model missing), we fall
-        back to the V2 #5 behavior of relying on listen.state=stop.
-        """
-        if session.state != SessionState.LISTENING:
-            return
-
-        # Decode Opus → PCM (reuse codec for the session — decoder is stateful)
-        codec = self._codecs.get(session.session_id)
-        if codec is None:
-            codec = make_codec(
-                sample_rate=session.audio_params.sample_rate,
-                channels=session.audio_params.channels,
-                frame_duration_ms=session.audio_params.frame_duration,
-            )
-            self._codecs[session.session_id] = codec
-        try:
-            pcm = codec.decode(opus_frame)
-        except Exception as e:
-            self.log.warning("audio.decode_failed", error=str(e), frame_size=len(opus_frame))
-            return
-
-        # V2 #8.3: server-side VAD
-        if self.vad is not None:
-            have_voice = self.vad.is_vad(session, opus_frame)
-
-            # Cache 10 frames even when no voice — captures sentence start
-            if not have_voice and not session.client_have_voice:
-                session.append_audio(pcm)
-                # Keep only last ~10 frames worth of audio
-                max_keep = 10 * len(pcm)
-                if len(session.pcm_buffer) > max_keep:
-                    del session.pcm_buffer[: -max_keep]
-                return
-
-            session.append_audio(pcm)
-
-            # voice_stop detected → trigger ASR pipeline
-            if session.client_voice_stop:
-                self.log.info(
-                    "vad.voice_stop",
-                    session_id=session.session_id,
-                    pcm_bytes=len(session.pcm_buffer),
-                )
-                # Reset VAD state BEFORE processing (so a new turn can start)
-                self.vad.reset_session_state(session)
-                await self._process_turn(ws, session)
-        else:
-            # No VAD: just buffer and rely on listen.state=stop
-            session.append_audio(pcm)
+        """V2 #11c: thin shim → audio/handler.handle_audio."""
+        from .audio.handler import handle_audio as _handle_audio
+        await _handle_audio(self, ws, session, opus_frame)
 
     async def _handle_listen(
         self,
@@ -523,75 +483,26 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         msg: ListenMessage,
     ) -> None:
-        """Handle listen state changes."""
-        session.touch()
-        self.log.info(
-            "listen.event",
-            session_id=session.session_id,
-            state=msg.state,
-            mode=msg.mode,
-            text=msg.text,
-        )
+        """V2 #11b: thin shim → handle/textHandler/listenMessageHandler.
 
-        if msg.state == "start":
-            await self._transition(session, SessionState.LISTENING)
-            session.pcm_buffer.clear()
-            # V2 #8.3: reset VAD state and start wake-up grace period
-            # (mirrors official xiaozhi-esp32-server: ignore VAD for 2s
-            # after wake word to avoid false positive from wake word tail)
-            if self.vad is not None:
-                self.vad.reset_session_state(session)
-                session.just_woken_up = True
-                # Schedule grace period end (2s, matches official)
-                import asyncio
-                self._wake_grace_tasks = getattr(self, "_wake_grace_tasks", [])
-                task = asyncio.create_task(
-                    self._end_wake_grace(session),
-                    name=f"wake_grace_{session.session_id}",
-                )
-                self._wake_grace_tasks.append(task)
-        elif msg.state == "stop":
-            # User stopped recording → run ASR → LLM → TTS pipeline
-            await self._process_turn(ws, session)
-        elif msg.state == "detect":
-            # Wake word detected (with text hint) → just process the text directly
-            if msg.text:
-                await self._process_text(ws, session, msg.text)
+        Kept as a method shim so any legacy code that calls
+        `server._handle_listen(ws, session, msg)` (e.g. the
+        V2 #7 MagicMock tests) continues to work. The actual
+        dispatch goes through the new registry in _main_loop.
+        """
+        from .handle.textHandler.listenMessageHandler import ListenTextMessageHandler
+        handler = ListenTextMessageHandler()
+        await handler.handle(self, ws, session, msg)
 
     async def _end_wake_grace(self, session: SessionContext) -> None:
-        """V2 #8.3: end the 2-second post-wake VAD grace period.
-
-        Mirrors official xiaozhi-esp32-server: just_woken_up=True is
-        set in _handle_listen(start), and reset 2s later to avoid
-        false VAD positives from the wake word audio tail.
-        """
-        import asyncio
-        await asyncio.sleep(2.0)
-        if hasattr(session, "just_woken_up"):
-            session.just_woken_up = False
-            self.log.info("vad.wake_grace_ended", session_id=session.session_id)
+        """V2 #11c: thin shim → audio/handler.end_wake_grace."""
+        from .audio.handler import end_wake_grace as _end_wake_grace
+        await _end_wake_grace(self, session)
 
     def _cancel_wake_grace(self, session: SessionContext) -> None:
-        """V2 #8.4: cancel the wake-grace task for a session.
-
-        Called from session.closed cleanup to avoid tasks that reference
-        a session after the session has been removed from self.sessions.
-        """
-        if not hasattr(self, "_wake_grace_tasks"):
-            return
-        session_id = session.session_id
-        target_name = f"wake_grace_{session_id}"
-        # Cancel all matching tasks
-        for task in self._wake_grace_tasks:
-            if task.get_name() == target_name and not task.done():
-                task.cancel()
-        # Remove the matching task by NAME (not by done state, since
-        # task.cancel() doesn't immediately set done=True — the task
-        # needs an event loop iteration to actually mark itself done).
-        self._wake_grace_tasks = [
-            t for t in self._wake_grace_tasks
-            if t.get_name() != target_name and not t.done()
-        ]
+        """V2 #11c: thin shim → audio/handler.cancel_wake_grace."""
+        from .audio.handler import cancel_wake_grace as _cancel_wake_grace
+        _cancel_wake_grace(self, session)
 
     async def _handle_abort(
         self,
@@ -599,10 +510,10 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         msg: AbortMessage,
     ) -> None:
-        """Handle abort."""
-        self.log.info("abort.received", session_id=session.session_id, reason=msg.reason)
-        await self._transition(session, SessionState.IDLE)
-        # TBD: cancel any in-flight LLM/TTS
+        """V2 #11b: thin shim → handle/textHandler/abortMessageHandler."""
+        from .handle.textHandler.abortMessageHandler import AbortTextMessageHandler
+        handler = AbortTextMessageHandler()
+        await handler.handle(self, ws, session, msg)
 
     async def _handle_mcp(
         self,
@@ -610,53 +521,20 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         msg: MCPMessage,
     ) -> None:
-        """Handle MCP JSON-RPC 2.0 message from device.
-
-        Two cases:
-        1. Request (has id): the device is calling a bridge-side tool.
-           Forward to MCPServer.handle() and ship the response back.
-        2. Response (no method, has id + result/error): the device is
-           answering an MCP call the bridge sent earlier (V2 #7
-           DeviceToolHandler). Resolve the matching pending future
-           from session.pending_mcp_calls.
-        """
-        payload = msg.payload
-        # Case 2: response — resolve a pending future.
-        if "id" in payload and "method" not in payload:
-            try:
-                request_id = int(payload["id"])
-            except (TypeError, ValueError):
-                self.log.warning("mcp.bad_response_id", payload=payload)
-                return
-            future = session.pending_mcp_calls.pop(request_id, None)
-            if future is None or future.done():
-                self.log.warning(
-                    "mcp.unknown_response", request_id=request_id, session_id=session.session_id,
-                )
-                return
-            if "error" in payload:
-                future.set_exception(RuntimeError(f"mcp error: {payload['error']}"))
-            else:
-                future.set_result(payload.get("result"))
-            self.log.info(
-                "mcp.response_received",
-                session_id=session.session_id,
-                request_id=request_id,
-            )
-            return
-
-        # Case 1: request — dispatch to MCPServer.
-        self.log.info("mcp.request_received", session_id=session.session_id)
-        response = await self.mcp.handle(payload)
-        if response is not None:
-            await ws.send(serialize_server_message(
-                MCPMessage(session_id=session.session_id, payload=response)
-            ))
+        """V2 #11b: thin shim → handle/textHandler/mcpMessageHandler."""
+        from .handle.textHandler.mcpMessageHandler import McpTextMessageHandler
+        handler = McpTextMessageHandler()
+        await handler.handle(self, ws, session, msg)
 
     # V2 #7: send an MCP tools/call request to the device and stash
     # the response future so _handle_mcp can resolve it when the
     # device replies. Used by DeviceToolHandler instances registered
     # as LLM-callable tools.
+    #
+    # V2 #11a: extracted to mcp/handlers.send_mcp_call (thin shim
+    # kept here for V2 #7 test compatibility; the new code path
+    # in register_device_tools imports handlers.send_mcp_call
+    # directly).
     async def _send_mcp_call(
         self,
         ws: WebSocketServerProtocol,
@@ -665,144 +543,63 @@ class XiaozhiBridgeServer:
         arguments: dict,
         future: asyncio.Future,
     ) -> None:
-        """Send a JSON-RPC `tools/call` to the device and register future.
-
-        The future is stored in session.pending_mcp_calls and resolved
-        by _handle_mcp when the matching response arrives.
-        """
-        session.mcp_request_id += 1
-        request_id = session.mcp_request_id
-        session.pending_mcp_calls[request_id] = future
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
-        await ws.send(serialize_server_message(
-            MCPMessage(session_id=session.session_id, payload=payload)
-        ))
-        self.log.info(
-            "mcp.call_sent",
-            session_id=session.session_id,
-            request_id=request_id,
-            tool=tool_name,
-        )
+        from .mcp.handlers import send_mcp_call as _send_mcp_call
+        await _send_mcp_call(self, ws, session, tool_name, arguments, future)
 
     def _register_device_tools(
         self,
         session: SessionContext,
         ws: WebSocketServerProtocol,
     ) -> None:
-        """V2 #7: Register esp32-side tools as LLM-callable MCP tools.
+        """V2 #7 + V2 #11a: thin shim → mcp/handlers.register_device_tools.
 
-        Each DeviceToolHandler holds a closure over `_send_mcp_call`
-        bound to this session's ws. When the LLM emits a tool_use
-        for one of these names, the bridge ships a JSON-RPC
-        `tools/call` to esp32 and awaits the response.
-
-        The MCP tool registry is process-global, so we track which
-        session owns which handlers and clean them up on disconnect
-        (see `_cleanup_session_tools`). This prevents stale handlers
-        from older sessions leaking into new ones.
+        Kept as a method so the V2 #7 test (`test_mcp_v27_e2e`)
+        and the existing call sites in `_handle_connection`
+        don't need to change.
         """
-        from .mcp.tools import DeviceToolHandler, register_tool
-
-        # Track per-session tool ownership for cleanup at session close.
-        if not hasattr(self, "_session_tool_owners"):
-            self._session_tool_owners = {}
-        owned: list[str] = []
-
-        async def _send(tool_name: str, arguments: dict, future: asyncio.Future) -> None:
-            await self._send_mcp_call(ws, session, tool_name, arguments, future)
-
-        def _register(handler: DeviceToolHandler) -> None:
-            register_tool(handler)
-            owned.append(handler.name)
-
-        _register(DeviceToolHandler(
-            name="get_device_status",
-            description="获取设备当前状态（音量、亮度、Wi-Fi、电池等）",
-            input_schema={"type": "object", "properties": {}},
-            send_mcp_call=_send,
-        ))
-        _register(DeviceToolHandler(
-            name="set_volume",
-            description="设置扬声器音量（0-100）。修改后 esp32 会即时生效。",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "volume": {"type": "integer", "minimum": 0, "maximum": 100},
-                },
-                "required": ["volume"],
-            },
-            send_mcp_call=_send,
-        ))
-        _register(DeviceToolHandler(
-            name="set_brightness",
-            description="设置屏幕亮度（0-100）。如果当前亮度未知，先调 get_device_status。",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "brightness": {"type": "integer", "minimum": 0, "maximum": 100},
-                },
-                "required": ["brightness"],
-            },
-            send_mcp_call=_send,
-        ))
-        # Persist ownership so cleanup can find the right tool set.
-        self._session_tool_owners[session.session_id] = owned
-        self.log.info(
-            "device_tools.registered",
-            session_id=session.session_id,
-            tools=["get_device_status", "set_volume", "set_brightness"],
-        )
+        register_device_tools(self, session, ws, self.device_mcp_executor)
 
     def _cleanup_session_tools(self, session_id: str) -> None:
-        """V2 #7: unregister the device-tool handlers owned by ``session_id``.
+        """V2 #7 + V2 #11a: thin shim → mcp/handlers.cleanup_session_tools.
 
-        Called from the connection's ``finally`` block to prevent stale
-        handlers (with old ws/session closures) from leaking into
-        future sessions. This is a stopgap until V2 #7.7 lands
-        per-session MCP servers.
+        Kept as a method so the V2 #7 test
+        (`test_mcp_v27_session_cleanup.py`) can still call
+        `XiaozhiBridgeServer._cleanup_session_tools(server, ...)`
+        with a MagicMock.
         """
-        if not hasattr(self, "_session_tool_owners"):
-            return
-        from .mcp.tools import unregister_tool
-        owned = self._session_tool_owners.pop(session_id, [])
-        for name in owned:
-            try:
-                unregister_tool(name)
-            except Exception:
-                self.log.warning("device_tool.unregister_failed", name=name)
-        if owned:
-            self.log.info(
-                "device_tools.unregistered",
-                session_id=session_id,
-                tools=owned,
-            )
+        cleanup_session_tools(self, session_id)
 
     # --- Pipeline ---
 
     def _build_llm_tools_payload(self) -> list[dict]:
-        """V2 #7: Build the OpenAI `tools` array from the MCP registry.
+        """V2 #7 + V2 #11a: thin shim → mcp/handlers.build_llm_tools_payload.
 
-        Returns an empty list if no tools are registered (LLM then
-        just produces text). The returned shape is the OpenAI chat
-        completions spec: [{"type": "function", "function": {...}}].
+        Returns an empty list if no tools are registered. The
+        returned shape is the OpenAI chat completions spec:
+        [{"type": "function", "function": {...}}].
+
+        Backward compat (V2 #7 MagicMock tests): if `self` is a
+        MagicMock without `tool_manager`, fall back to the
+        legacy _REGISTRY path. This keeps the V2 #7 e2e tests
+        working with `MagicMock` instead of a real server.
         """
-        from .mcp import tools as tool_registry
-        out: list[dict] = []
-        for spec in tool_registry.list_tools(with_user_tools=False):
-            out.append({
-                "type": "function",
-                "function": {
-                    "name": spec["name"],
-                    "description": spec["description"],
-                    "parameters": spec["inputSchema"],
-                },
-            })
-        return out
+        tm = getattr(self, "tool_manager", None)
+        if tm is None:
+            # Legacy path for tests that build a MagicMock without
+            # the full server __init__.
+            from .mcp import tools as tool_registry
+            out: list[dict] = []
+            for spec in tool_registry.list_tools(with_user_tools=False):
+                out.append({
+                    "type": "function",
+                    "function": {
+                        "name": spec["name"],
+                        "description": spec["description"],
+                        "parameters": spec["inputSchema"],
+                    },
+                })
+            return out
+        return build_llm_tools_payload(tm)
 
     async def _dispatch_tool(
         self,
@@ -810,72 +607,41 @@ class XiaozhiBridgeServer:
         name: str,
         arguments: dict,
     ) -> str:
-        """V2 #7: Invoke a tool by name and return a text result.
+        """V2 #7 + V2 #11a: thin shim → mcp/handlers.dispatch_tool.
 
-        Two execution paths:
-        1. DeviceToolHandler (e.g. set_volume): forwards to esp32 via
-           the xiaozhi MCP channel and awaits the device's response.
-        2. FunctionTool (e.g. get_device_status in V1 mock): runs a
-           Python function locally. The function may still be called
-           even for "device" tools if the device is offline — the
-           result is whatever the local function returns.
+        Dispatches via ToolManager (which knows about both
+        FunctionTool and DeviceMCPExecutor paths).
+
+        Backward compat: MagicMock tests that don't have a
+        real tool_manager fall through to the legacy _REGISTRY
+        path. (V2 #7 e2e test fixture.)
         """
-        from .mcp import tools as tool_registry
-        try:
-            result = await tool_registry.call_tool(name, arguments)
-        except KeyError:
-            self.log.warning("tool.unknown", name=name)
-            return f"Error: tool {name!r} not found"
-        except Exception as e:
-            self.log.exception("tool.failed", name=name)
-            return f"Error: tool {name!r} failed: {e!r}"
-        # Normalize the result to a string for the role=tool message.
-        if isinstance(result, str):
-            return result
-        return json.dumps(result, ensure_ascii=False, default=str)
+        from .mcp.handlers import dispatch_tool as _dispatch_tool
+        tm = getattr(self, "tool_manager", None)
+        if tm is None:
+            # Legacy fallback: use the global _REGISTRY.
+            from .mcp import tools as tool_registry
+            try:
+                result = await tool_registry.call_tool(name, arguments)
+            except KeyError:
+                self.log.warning("tool.unknown", name=name)
+                return f"Error: tool {name!r} not found"
+            except Exception as e:
+                self.log.exception("tool.failed", name=name)
+                return f"Error: tool {name!r} failed: {e!r}"
+            if isinstance(result, str):
+                return result
+            return json.dumps(result, ensure_ascii=False, default=str)
+        return await _dispatch_tool(self, session, name, arguments, tm)
 
     async def _process_turn(
         self,
         ws: WebSocketServerProtocol,
         session: SessionContext,
     ) -> None:
-        """Process one turn: ASR → LLM → TTS.
-
-        Called when the device sends listen=stop (end of recording).
-        """
-        pcm = session.clear_audio()
-        if not pcm:
-            self.log.info("turn.empty_audio", session_id=session.session_id)
-            await self._transition(session, SessionState.IDLE)
-            return
-
-        await self._transition(session, SessionState.THINKING)
-
-        # 1) ASR: PCM → text
-        try:
-            asr_result = await self.asr.transcribe(
-                pcm,
-                sample_rate=session.audio_params.sample_rate,
-                channels=session.audio_params.channels,
-            )
-        except Exception:
-            self.log.exception("asr.failed")
-            await self._send_tts(ws, session, "抱歉，我没听清楚。")
-            await self._transition(session, SessionState.IDLE)
-            return
-
-        text = asr_result.text.strip()
-        if not text:
-            await self._transition(session, SessionState.IDLE)
-            return
-
-        # Send STT result to device (so it can show on screen)
-        await ws.send(serialize_server_message(
-            STTMessage(session_id=session.session_id, text=text)
-        ))
-
-        # 2) LLM + 3) TTS
-        await self._process_text(ws, session, text)
+        """V2 #11c: thin shim → pipeline/turn.process_turn."""
+        from .pipeline.turn import process_turn as _process_turn
+        await _process_turn(self, ws, session)
 
     async def _process_text(
         self,
@@ -883,157 +649,9 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         text: str,
     ) -> None:
-        """Process a text input (from ASR or wake word detect).
-
-        Drives: LLM streaming → (optional tool dispatch) → TTS streaming.
-
-        V1: openclaw owned tool dispatch; no tool_calls flowed through here.
-        V2 #7: bridge owns tool dispatch for esp32-side tools. When the LLM
-        emits a TOOL_CALL event, we:
-          1. Resolve the tool name against the MCP registry
-          2. Invoke the tool (FunctionTool runs locally; DeviceToolHandler
-             forwards a JSON-RPC `tools/call` to esp32 and awaits the
-             matching response)
-          3. Append the result to the message list as a role=tool entry
-          4. Resume chat_stream with the augmented messages
-          5. Loop until the LLM stops calling tools (max iterations to
-             prevent infinite loops)
-        """
-        await self._transition(session, SessionState.THINKING)
-        session.current_text = text
-        session.current_turn_id += 1
-
-        # Build messages for LLM (single user turn; openclaw keeps the
-        # rest of the conversation history keyed by the `user` field).
-        messages: list[LLMMessage_] = [LLMMessage_(role="user", content=text)]
-
-        # V2 #7: build the tools list (OpenAI shape) from the MCP
-        # registry. The LLM will see these in tools=... and may
-        # emit tool_calls for any of them.
-        tools_payload = self._build_llm_tools_payload()
-
-        # Stream LLM with tool-use loop (V2 #7)
-        full_text_parts: list[str] = []
-        try:
-            for _ in range(5):  # max tool-use iterations
-                tool_dispatched = False
-                # Track the text the LLM produced in THIS iteration,
-                # so we can attach it to the assistant tool_calls turn
-                # (OpenAI API contract: if a turn has both text and
-                # tool_calls, both must be present in the next request
-                # — sending tool_calls alone causes 400 errors on
-                # some backends).
-                iter_text_parts: list[str] = []
-                async for event in self.llm.chat_stream(
-                    messages=messages, tools=tools_payload,
-                ):
-                    if event.kind == "text" and event.text:
-                        full_text_parts.append(event.text)
-                        iter_text_parts.append(event.text)
-                    elif event.kind == "tool_call" and event.tool_call:
-                        # LLM wants to invoke a tool. Forward it.
-                        tc = event.tool_call
-                        self.log.info(
-                            "llm.tool_call",
-                            session_id=session.session_id,
-                            name=tc.get("name"),
-                            args=tc.get("arguments"),
-                        )
-                        # Append the assistant's tool_call turn to
-                        # messages (required for OpenAI tool-use API
-                        # contract: every tool result must be preceded
-                        # by the matching assistant tool_calls turn).
-                        # If the LLM produced text BEFORE the tool call
-                        # (common when the LLM says "let me check..."),
-                        # we must include it in `content`; some
-                        # backends reject tool_calls-only turns.
-                        iter_text = "".join(iter_text_parts)
-                        messages.append(LLMMessage_(
-                            role="assistant",
-                            content=iter_text,
-                            tool_calls=[{
-                                "id": tc.get("id") or f"call_{session.current_turn_id}",
-                                "type": "function",
-                                "function": {
-                                    "name": tc.get("name", ""),
-                                    "arguments": json.dumps(tc.get("arguments", {})),
-                                },
-                            }],
-                        ))
-                        # Invoke the tool via the MCP registry.
-                        tool_result_text = await self._dispatch_tool(
-                            session, tc.get("name", ""), tc.get("arguments", {}),
-                        )
-                        # Append the tool result as a role=tool message
-                        # (must reference the assistant's tool_call id).
-                        messages.append(LLMMessage_(
-                            role="tool",
-                            content=tool_result_text,
-                            tool_call_id=tc.get("id") or f"call_{session.current_turn_id}",
-                        ))
-                        # Set flag to indicate we dispatched a tool
-                        # and need another chat_stream iteration.
-                        tool_dispatched = True
-                        break
-                    elif event.kind == "done":
-                        break
-                    elif event.kind == "error":
-                        self.log.error("llm.error", error=event.error)
-                        break
-                # If the inner stream finished without dispatching a
-                # tool, we're done with the outer loop.
-                if not tool_dispatched:
-                    break
-                # Otherwise loop again with the augmented messages.
-        except Exception:
-            self.log.exception("llm.stream_failed")
-            await self._send_tts(ws, session, "抱歉，我的大脑出错了。")
-            await self._transition(session, SessionState.IDLE)
-            return
-
-        full_text = "".join(full_text_parts).strip()
-
-        if not full_text:
-            full_text = "嗯，我还没想好怎么回答。"
-
-        # Send LLM emotion/text cue
-        await ws.send(serialize_server_message(
-            LLMMessage(
-                session_id=session.session_id,
-                emotion="happy",
-                text="",
-            )
-        ))
-
-        # 3) TTS — stream the text. If the device disconnects mid-TTS
-        # (V2 #8.4), _send_tts surfaces ConnectionClosed; we still
-        # want to persist the assistant turn to DB before the
-        # connection's finally block tears down the session.
-        try:
-            await self._send_tts(ws, session, full_text)
-        except websockets.exceptions.ConnectionClosed:
-            self.log.info(
-                "tts.connection_closed",
-                session_id=session.session_id,
-            )
-            # Fall through to DB persistence and IDLE.
-
-        # V2 #3: persist the turn (user text + assistant text) to sqlite
-        if self._db is not None:
-            try:
-                await self._db.record_conversation(
-                    device_id=session.device_id,
-                    session_id=session.session_id,
-                    stt_text=text,
-                    assistant_text=full_text,
-                    llm_status="ok",
-                )
-            except Exception as e:
-                self.log.warning("db.record_conversation_failed", error=str(e))
-
-        # Clear audio buffer after the turn is complete
-        session.clear_audio()
-        await self._transition(session, SessionState.IDLE)
+        """V2 #11c: thin shim → pipeline/turn.process_text."""
+        from .pipeline.turn import process_text as _process_text
+        await _process_text(self, ws, session, text)
 
     async def _send_tts(
         self,
@@ -1041,84 +659,6 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         text: str,
     ) -> None:
-        """Send TTS for the given text.
-
-        Streams:
-          tts.start → tts.sentence_start,text → Opus frames → tts.stop
-        """
-        await self._transition(session, SessionState.SPEAKING)
-
-        # TTS start
-        await ws.send(serialize_server_message(
-            TTSMessage(session_id=session.session_id, state="start")
-        ))
-
-        # Sentence start (text displayed on device)
-        await ws.send(serialize_server_message(
-            TTSMessage(
-                session_id=session.session_id,
-                state="sentence_start",
-                text=text,
-            )
-        ))
-
-        # TTS audio chunks
-        try:
-            tts_sr = 24000  # typical for xiaozhi playback
-            tts_frame_ms = 60
-            tts_codec = make_codec(
-                sample_rate=tts_sr, channels=1, frame_duration_ms=tts_frame_ms
-            )
-            tts_frame_bytes = tts_sr * tts_frame_ms // 1000 * 2  # int16
-            # If the codec is a real OpusCodec, encode PCM → Opus before sending.
-            # PassThroughCodec (no libopus) just forwards bytes as-is.
-            from .protocol.audio import OpusCodec
-            do_encode = isinstance(tts_codec, OpusCodec)
-
-            pcm_buf = bytearray()
-            async for chunk in self.tts.synthesize_stream(text, sample_rate=tts_sr):
-                if not chunk.pcm:
-                    continue
-                pcm_buf.extend(chunk.pcm)
-                # Emit complete frames; keep any tail in the buffer.
-                while len(pcm_buf) >= tts_frame_bytes:
-                    frame = bytes(pcm_buf[:tts_frame_bytes])
-                    del pcm_buf[:tts_frame_bytes]
-                    if do_encode:
-                        frame = tts_codec.encode(frame)
-                    await ws.send(frame)
-            # Flush any trailing PCM (pad with silence to a full frame).
-            if pcm_buf:
-                pad_samples = (tts_frame_bytes - len(pcm_buf)) // 2
-                frame = bytes(pcm_buf) + b"\x00\x00" * pad_samples
-                if do_encode:
-                    frame = tts_codec.encode(frame)
-                await ws.send(frame)
-        except Exception as e:
-            # V2 #8.4: distinguish ConnectionClosed (esp32 gone) from
-            # real TTS failures. esp32 often disconnects mid-TTS due to
-            # keepalive timeout (LLM 19s thinking), and we don't want
-            # the resulting ConnectionClosedError to pollute the log
-            # as a "tts failure" — the TTS itself succeeded, the
-            # transport just died.
-            if isinstance(e, websockets.exceptions.ConnectionClosed):
-                self.log.warning(
-                    "tts.client_disconnected",
-                    session_id=session.session_id,
-                    code=e.code,
-                    reason=str(e.reason) if e.reason else None,
-                )
-            else:
-                self.log.exception("tts.failed")
-
-        # TTS stop — also guarded: if the ws died mid-TTS, we just skip
-        try:
-            await ws.send(serialize_server_message(
-                TTSMessage(session_id=session.session_id, state="stop")
-            ))
-        except websockets.exceptions.ConnectionClosed as e:
-            self.log.warning(
-                "tts.stop.client_disconnected",
-                session_id=session.session_id,
-                code=e.code,
-            )
+        """V2 #11c: thin shim → pipeline/tts.send_tts."""
+        from .pipeline.tts import send_tts as _send_tts
+        await _send_tts(self, ws, session, text)

@@ -1,6 +1,6 @@
 [project]
 name = "xiaozhi-bridge"
-version = "0.2.12"
+version = "0.2.13"
 description = "Lightweight WebSocket bridge for xiaozhi-esp32 devices, with openclaw + M3 as the LLM brain."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -91,6 +91,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B", "SIM"]
+# V2 #11b: handle/ uses camelCase module names to mirror the
+# 78/xiaozhi-esp32-server official reference (textMessageHandler,
+# textMessageProcessor, etc.). N999 would otherwise flag every file.
+"src/xiaozhi_bridge/handle/**/*.py" = ["N999"]
 
 [tool.mypy]
 python_version = "3.12"

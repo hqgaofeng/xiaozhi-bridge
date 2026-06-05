@@ -34,6 +34,7 @@
 | **V2 #10** | v0.2.10 | 2026-06-05 | SenseVoice ASR | sherpa-onnx-streaming-zipformer 长句 > 15s 乱码，SenseVoice int8 230MB 5 语种离线；12 段 wav 0 乱码 RTF 0.32 平均；config 默认切到 sensevoice；7 个新单测 |
 | **V2 #7** | v0.2.11 | 2026-06-05 | 反向 MCP（bridge→esp32）| esp32 自身是 MCP Server（mcp_server.cc 560 行 + 6 工具）；bridge 透 JSON-RPC 2.0 调 esp32 端 tool；改 4 文件（mcp/tools + server + llm/openclaw + protocol/states）；10 个 V2 #7 测试 |
 | **V2 #7 复盘** | v0.2.12 | 2026-06-05 | 9 个深度审视 bug + 11 个测试 | Bug 1 `for/else` 诡计 / Bug 2 `_build_payload` 丢 tool_calls / Bug 3 ESP32_NAME_MAP dead code / Bug 4 race condition / Bug 6 ConnectionClosed 吞 DB / Bug 7 pending_mcp_calls 不清理 / Bug 8 assistant text+tool_calls 同时发 / Bug 9 id 字符串拼接；11 个新测；171 passed |
+| **V2 #11** | v0.2.13 | 2026-06-05 | 模块重构（server.py 1124→664 行）| 4 个新模块（`mcp/{client,manager,handlers}` + `handle/` + `pipeline/{turn,tts}` + `audio/handler`）；学官方 78/xiaozhi-esp32-server 的 handle/textHandler + ToolManager + per-session MCPClient + asyncio.Lock；server.py 41% 瘦身；18 个新文件 + 16 个新测；147 passed + 7 skipped = 154 |
 
 ### 🧪 端到端实测
 
@@ -53,6 +54,7 @@
 | SenseVoice 真模型 | v0.2.10 容器内 `sherpa_onnx.OfflineRecognizer.from_sense_voice` + 12 wav 5 语种 | RTF 0.32 平均 0 乱码；zipformer 24s 长句 248 字符乱码对比 |
 | 反向 MCP 端到端 | v0.2.11 mock esp32 响应 3 e2e + 7 单元测试 | `set_volume{volume:50}` → bridge 发 JSON-RPC → mock 返 ok → LLM 续 text "音量已调到 50" |
 | V2 #7 复盘修 | v0.2.12 11 个回归测试 + 9 bug fix | 165 passed + 6 skipped（171 total）；race condition 修；tool_calls 不丢 |
+| V2 #11 模块重构 | v0.2.13 server.py 1124→664 行（-41%）| 18 个新文件 + 16 个新测；学官方 78/xiaozhi-esp32-server handle/textHandler + ToolManager + per-session MCPClient；147 passed + 7 skipped = 154 |
 
 ### ✅ V2 路线图（12 项全部完成）
 
@@ -64,7 +66,7 @@
 | 4 | SQLite 对话持久化 | ✅ v0.2.1 |
 | 5 | 智控台接真数据 | ✅ web 0.2.0 |
 | 6 | 多设备 + reachability | ✅ v0.2.6（多设备） |
-| 7 | 反向 MCP | ✅ v0.2.12（bridge→esp32 工具调用） |
+| 7 | 反向 MCP | ✅ v0.2.11（bridge→esp32 工具调用） |
 | 8 | OTA + VAD + 链路收口 | ✅ v0.2.9（esp32 OTA + 服务端 VAD） |
 | 9 | MQTT | ⏳ |
 | 10 | 声纹 | ⏳ |
