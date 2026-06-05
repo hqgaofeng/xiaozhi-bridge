@@ -11,6 +11,7 @@ Each connection runs an independent asyncio task with its own SessionContext.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -347,6 +348,14 @@ class XiaozhiBridgeServer:
                 device_id=device_id,
             )
 
+            # V2 #7: register device-side tools (set_volume, etc.) as
+            # LLM-callable MCP tools. These forward through the xiaozhi
+            # `mcp` channel to esp32, which is itself an MCP server
+            # (see esp32's mcp_server.cc). The future dance: tool __call__
+            # awaits the future; the future is resolved in _handle_mcp
+            # when the device sends the JSON-RPC response.
+            self._register_device_tools(session, ws)
+
             # V2 #3: persist to sqlite for the HTTP API
             if self._db is not None:
                 try:
@@ -584,15 +593,195 @@ class XiaozhiBridgeServer:
         session: SessionContext,
         msg: MCPMessage,
     ) -> None:
-        """Handle MCP JSON-RPC 2.0 message from device."""
-        self.log.info("mcp.received", session_id=session.session_id)
-        response = await self.mcp.handle(msg.payload)
+        """Handle MCP JSON-RPC 2.0 message from device.
+
+        Two cases:
+        1. Request (has id): the device is calling a bridge-side tool.
+           Forward to MCPServer.handle() and ship the response back.
+        2. Response (no method, has id + result/error): the device is
+           answering an MCP call the bridge sent earlier (V2 #7
+           DeviceToolHandler). Resolve the matching pending future
+           from session.pending_mcp_calls.
+        """
+        payload = msg.payload
+        # Case 2: response — resolve a pending future.
+        if "id" in payload and "method" not in payload:
+            try:
+                request_id = int(payload["id"])
+            except (TypeError, ValueError):
+                self.log.warning("mcp.bad_response_id", payload=payload)
+                return
+            future = session.pending_mcp_calls.pop(request_id, None)
+            if future is None or future.done():
+                self.log.warning(
+                    "mcp.unknown_response", request_id=request_id, session_id=session.session_id,
+                )
+                return
+            if "error" in payload:
+                future.set_exception(RuntimeError(f"mcp error: {payload['error']}"))
+            else:
+                future.set_result(payload.get("result"))
+            self.log.info(
+                "mcp.response_received",
+                session_id=session.session_id,
+                request_id=request_id,
+            )
+            return
+
+        # Case 1: request — dispatch to MCPServer.
+        self.log.info("mcp.request_received", session_id=session.session_id)
+        response = await self.mcp.handle(payload)
         if response is not None:
             await ws.send(serialize_server_message(
                 MCPMessage(session_id=session.session_id, payload=response)
             ))
 
+    # V2 #7: send an MCP tools/call request to the device and stash
+    # the response future so _handle_mcp can resolve it when the
+    # device replies. Used by DeviceToolHandler instances registered
+    # as LLM-callable tools.
+    async def _send_mcp_call(
+        self,
+        ws: WebSocketServerProtocol,
+        session: SessionContext,
+        tool_name: str,
+        arguments: dict,
+        future: asyncio.Future,
+    ) -> None:
+        """Send a JSON-RPC `tools/call` to the device and register future.
+
+        The future is stored in session.pending_mcp_calls and resolved
+        by _handle_mcp when the matching response arrives.
+        """
+        session.mcp_request_id += 1
+        request_id = session.mcp_request_id
+        session.pending_mcp_calls[request_id] = future
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        await ws.send(serialize_server_message(
+            MCPMessage(session_id=session.session_id, payload=payload)
+        ))
+        self.log.info(
+            "mcp.call_sent",
+            session_id=session.session_id,
+            request_id=request_id,
+            tool=tool_name,
+        )
+
+    def _register_device_tools(
+        self,
+        session: SessionContext,
+        ws: WebSocketServerProtocol,
+    ) -> None:
+        """V2 #7: Register esp32-side tools as LLM-callable MCP tools.
+
+        Each DeviceToolHandler holds a closure over `_send_mcp_call`
+        bound to this session's ws. When the LLM emits a tool_use
+        for one of these names, the bridge ships a JSON-RPC
+        `tools/call` to esp32 and awaits the response.
+        """
+        from .mcp.tools import DeviceToolHandler, register_tool
+
+        async def _send(tool_name: str, arguments: dict, future: asyncio.Future) -> None:
+            await self._send_mcp_call(ws, session, tool_name, arguments, future)
+
+        # Only register the handlers (registry is process-global). The
+        # ws/session closure ensures each call goes to the right device.
+        # If multiple sessions are active, the registry holds the
+        # LATEST registered handler — we accept this V1 simplification
+        # because the bridge currently serves 1 device at a time per
+        # process. (V2 #7.x: per-session MCP server if multi-device.)
+        register_tool(DeviceToolHandler(
+            name="self.get_device_status",
+            description="获取设备当前状态（音量、亮度、Wi-Fi、电池等）",
+            input_schema={"type": "object", "properties": {}},
+            send_mcp_call=_send,
+        ))
+        register_tool(DeviceToolHandler(
+            name="self.audio_speaker.set_volume",
+            description="设置扬声器音量（0-100）。修改后 esp32 会即时生效。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "volume": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["volume"],
+            },
+            send_mcp_call=_send,
+        ))
+        register_tool(DeviceToolHandler(
+            name="self.screen.set_brightness",
+            description="设置屏幕亮度（0-100）。如果当前亮度未知，先调 get_device_status。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "brightness": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["brightness"],
+            },
+            send_mcp_call=_send,
+        ))
+        self.log.info(
+            "device_tools.registered",
+            session_id=session.session_id,
+            tools=["get_device_status", "set_volume", "set_brightness"],
+        )
+
     # --- Pipeline ---
+
+    def _build_llm_tools_payload(self) -> list[dict]:
+        """V2 #7: Build the OpenAI `tools` array from the MCP registry.
+
+        Returns an empty list if no tools are registered (LLM then
+        just produces text). The returned shape is the OpenAI chat
+        completions spec: [{"type": "function", "function": {...}}].
+        """
+        from .mcp import tools as tool_registry
+        out: list[dict] = []
+        for spec in tool_registry.list_tools(with_user_tools=False):
+            out.append({
+                "type": "function",
+                "function": {
+                    "name": spec["name"],
+                    "description": spec["description"],
+                    "parameters": spec["inputSchema"],
+                },
+            })
+        return out
+
+    async def _dispatch_tool(
+        self,
+        session: SessionContext,
+        name: str,
+        arguments: dict,
+    ) -> str:
+        """V2 #7: Invoke a tool by name and return a text result.
+
+        Two execution paths:
+        1. DeviceToolHandler (e.g. set_volume): forwards to esp32 via
+           the xiaozhi MCP channel and awaits the device's response.
+        2. FunctionTool (e.g. get_device_status in V1 mock): runs a
+           Python function locally. The function may still be called
+           even for "device" tools if the device is offline — the
+           result is whatever the local function returns.
+        """
+        from .mcp import tools as tool_registry
+        try:
+            result = await tool_registry.call_tool(name, arguments)
+        except KeyError:
+            self.log.warning("tool.unknown", name=name)
+            return f"Error: tool {name!r} not found"
+        except Exception as e:
+            self.log.exception("tool.failed", name=name)
+            return f"Error: tool {name!r} failed: {e!r}"
+        # Normalize the result to a string for the role=tool message.
+        if isinstance(result, str):
+            return result
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     async def _process_turn(
         self,
@@ -645,11 +834,19 @@ class XiaozhiBridgeServer:
     ) -> None:
         """Process a text input (from ASR or wake word detect).
 
-        Drives: LLM streaming → TTS streaming → audio chunks.
+        Drives: LLM streaming → (optional tool dispatch) → TTS streaming.
 
-        V1: openclaw owns tool dispatch (web_search, etc.) and per-agent
-        system prompts, so we only stream the user text in and consume
-        the assistant's text back. No tool_calls flow through here.
+        V1: openclaw owned tool dispatch; no tool_calls flowed through here.
+        V2 #7: bridge owns tool dispatch for esp32-side tools. When the LLM
+        emits a TOOL_CALL event, we:
+          1. Resolve the tool name against the MCP registry
+          2. Invoke the tool (FunctionTool runs locally; DeviceToolHandler
+             forwards a JSON-RPC `tools/call` to esp32 and awaits the
+             matching response)
+          3. Append the result to the message list as a role=tool entry
+          4. Resume chat_stream with the augmented messages
+          5. Loop until the LLM stops calling tools (max iterations to
+             prevent infinite loops)
         """
         await self._transition(session, SessionState.THINKING)
         session.current_text = text
@@ -657,19 +854,74 @@ class XiaozhiBridgeServer:
 
         # Build messages for LLM (single user turn; openclaw keeps the
         # rest of the conversation history keyed by the `user` field).
-        messages = [LLMMessage_(role="user", content=text)]
+        messages: list[LLMMessage_] = [LLMMessage_(role="user", content=text)]
 
-        # Stream LLM
+        # V2 #7: build the tools list (OpenAI shape) from the MCP
+        # registry. The LLM will see these in tools=... and may
+        # emit tool_calls for any of them.
+        tools_payload = self._build_llm_tools_payload()
+
+        # Stream LLM with tool-use loop (V2 #7)
         full_text_parts: list[str] = []
         try:
-            async for event in self.llm.chat_stream(messages=messages):
-                if event.kind == "text" and event.text:
-                    full_text_parts.append(event.text)
-                elif event.kind == "done":
+            for _ in range(5):  # max tool-use iterations
+                async for event in self.llm.chat_stream(
+                    messages=messages, tools=tools_payload,
+                ):
+                    if event.kind == "text" and event.text:
+                        full_text_parts.append(event.text)
+                    elif event.kind == "tool_call" and event.tool_call:
+                        # LLM wants to invoke a tool. Forward it.
+                        tc = event.tool_call
+                        self.log.info(
+                            "llm.tool_call",
+                            session_id=session.session_id,
+                            name=tc.get("name"),
+                            args=tc.get("arguments"),
+                        )
+                        # Append the assistant's tool_call turn to
+                        # messages (required for OpenAI tool-use API
+                        # contract: every tool result must be preceded
+                        # by the matching assistant tool_calls turn).
+                        messages.append(LLMMessage_(
+                            role="assistant",
+                            content="",
+                            tool_calls=[{
+                                "id": tc.get("id") or f"call_{session.current_turn_id}",
+                                "type": "function",
+                                "function": {
+                                    "name": tc.get("name", ""),
+                                    "arguments": json.dumps(tc.get("arguments", {})),
+                                },
+                            }],
+                        ))
+                        # Invoke the tool via the MCP registry.
+                        tool_result_text = await self._dispatch_tool(
+                            session, tc.get("name", ""), tc.get("arguments", {}),
+                        )
+                        # Append the tool result as a role=tool message
+                        # (must reference the assistant's tool_call id).
+                        messages.append(LLMMessage_(
+                            role="tool",
+                            content=tool_result_text,
+                            tool_call_id=tc.get("id") or f"call_{session.current_turn_id}",
+                        ))
+                        # Break out of the inner stream to start a new
+                        # chat_stream with the augmented messages (the
+                        # LLM now sees the tool result and can decide
+                        # to call another tool or produce text).
+                        break
+                    elif event.kind == "done":
+                        break
+                    elif event.kind == "error":
+                        self.log.error("llm.error", error=event.error)
+                        break
+                else:
+                    # Inner stream completed without tool_call break.
+                    # This means we got a final text response — done.
                     break
-                elif event.kind == "error":
-                    self.log.error("llm.error", error=event.error)
-                    break
+                # If we broke out because of a tool_call, continue the
+                # outer loop with a fresh chat_stream.
         except Exception:
             self.log.exception("llm.stream_failed")
             await self._send_tts(ws, session, "抱歉，我的大脑出错了。")

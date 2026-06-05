@@ -4,6 +4,95 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.11] - 2026-06-05
+
+### V2 #7 反向 MCP: bridge 主动调 esp32 工具
+
+**The headline change**：v0.2.10 启用 SenseVoice 让 ASR 长句 95%+
+准，但 LLM 只能**说**不能**动** — esp32 上的扬声器/屏幕/LED 仍然
+**没**法**从** LLM 调**用**。v0.2.11 加 **反向 MCP**，让 bridge 透
+过 xiaozhi 协议**主动**调**用** esp32 端** MCP 工具**（`set_volume` /
+`set_brightness` / `get_device_status` 等），实**现**“**说**一句**话
+就能**调**设备**”的**完**整**闭**环**。
+
+**真相（调研锁**定**）**：
+
+- esp32 **自**身**是** MCP Server**（`mcp_server.cc` 560 行 + 6 工具）
+- 协议 = **JSON-RPC 2.0** over xiaozhi WS
+  （**`{"type":"mcp","payload":<jsonrpc>}`**）
+- bridge **不**需**新**开 WS / **不**需**新**协议** / **不**改** esp32
+- V2 #7 **只**改** 4 个**文件**（**mcp/tools.py / server.py / llm/openclaw.py / protocol/states.py**）
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/mcp/tools.py`：
+  - **新** `DeviceToolHandler` 类**（~110 行）**：工**具**__call__ 透
+    过 `_send_mcp_call` 闭**包**转**发** esp32 + `await` Future
+  - `ESP32_NAME_MAP` 桥**接**端 name → esp32 端 name（前**向**兼**容**）
+  - 5 **个**内**置** esp32 工具**（`get_device_status` /
+    `set_volume` / `set_brightness` / `set_rgb` / **保留** V1 的 3
+    个** FunctionTool**）
+- `bridge/src/xiaozhi_bridge/protocol/states.py`：
+  - `pending_mcp_calls: dict[int, Future]`（**JSON-RPC id** → Future）
+  - `mcp_request_id: int`（**单**调**增**计**数**器**）
+- `bridge/src/xiaozhi_bridge/server.py`：
+  - `_handle_mcp` 分**支**：response (id 匹**配**) **vs** request
+  - `_send_mcp_call(ws, session, tool_name, args, future)` 发
+    JSON-RPC `tools/call` 给 esp32 + 注**册** future
+  - `_register_device_tools(session, ws)` 在 session 创建**时**注**册
+    3 个 DeviceToolHandler（get_device_status / set_volume /
+    set_brightness）
+  - `_build_llm_tools_payload()` 从 MCP 注**册**表**构**建** OpenAI
+    形状的 tools 列表
+  - `_dispatch_tool(session, name, args)` 调**用**工**具** + **正**常**化**结果
+  - `_process_text` 重**写**：`TOOL_CALL` 事**件** → 调**用** 工**具** → 注**入** `role=tool` 消息 →
+    重**新** chat_stream（**max 5 轮** tool-use 循**环**）
+- `bridge/src/xiaozhi_bridge/llm/openclaw.py`：
+  - `_build_payload` 修**改**：`tools` 参**数**不**再** IGNORED
+    （**V1 错**误**）** + `tool_choice="auto"`
+  - `chat_stream` 新增 `tool_acc: dict[int, dict]` 累**加**器
+    累**积**多 chunk 的 `tool_calls` deltas
+  - 新增 `LLMEvent(kind="tool_call", ...)` 输**出**
+- `bridge/tests/test_mcp_v27.py`（**新**文**件**，187 行，**7 测试**）：
+  - DeviceToolHandler dispatch / timeout / isError / ESP32 name 映**射**
+  - FunctionTool 后**向**兼**容**（V1 不**破**）
+  - SessionContext pending_mcp_calls 状态
+- `bridge/tests/test_llm_tool_use.py`（**新**文**件**，142 行，**3 测试**）：
+  - openclaw 累**积** tool_calls deltas + 输**出** TOOL_CALL
+  - tools 参**数**传**给** openclaw
+  - **不**传** tools **时**不**加** `tools=[]` （**避**免** openclaw 惊**讶**）
+
+**4 风险** + 验**证**结**果**（V2 #7.3 调**研**）：
+
+| 风险 | 严**重**度 | 验**证**结**果** |
+|---|---|---|
+| L1 openclaw 是**否**推 tool_calls | **高** | 修**改**前 `tools` **参**数被 IGNORED；修**改**后正**常**转**发**给 openclaw |
+| L2 LLM 真**用** tool_use 吗 | 中 | LLM 决**策**依**赖** prompt；V2 #7 **不**保**证** LLM 选 tool（**未**做 prompt engineering）|
+| L3 esp32 mcp_server 接 set_volume 吗 | 中 | esp32 仓库 `mcp_server.cc` **有** `self.audio_speaker.set_volume` 工**具**回**调** — **是**接**的** |
+| L4 tool_use 后**续** stream | 中 | OpenAI 不**支**持** mid-stream tool_use；V2 #7 **采**取**"**收**到** finish_reason=tool_calls **就 break + 重**发** chat_stream**"** 策略 |
+
+**Verified before commit**（V2 #1 教**训** 4.3）：
+
+- `uv run --no-sync ruff check src tests`: **All checks passed**
+- `uv run --no-sync mypy src`: Success, no issues in 36 files
+- `pytest tests/ -q`: **154 passed, 6 skipped**（**+10 V2 #7 测试** = 7 mcp + 3 llm）
+- bridge + bridge-api 重 build + `up -d`：服务正常 + `version: 0.2.11`
+
+**Not in this commit**：
+
+- **未**做** prompt engineering** 让 LLM 选 tool（V2 #7.x）— 需**要**
+  在 openclaw system prompt 加 "**你**有**这些工**具**" 列**表**
+- **未**真**正** esp32 实**测** V2 #7 — esp32 不**在**线**（**iPhone 热点
+  断了**），只**做**了**端到**端** mock 测**试**（**V2 #7.7 esp32 实**测**留** V2 #7.x**）
+- **未**做** per-device 隔**离** — 当**前** `_register_device_tools`
+  **覆**盖**全**局** MCP 注**册**表；**多**设**备**并发**会**错**乱**（**V2 #7.7
+  用** per-session MCPServer 解**决**）
+- V2 #10.4 fallback_provider **未**做**（**V2 #10.3 已**经**切**了** sensevoice
+  默**认**）**
+- V2 #10.5 per-session 语**言**锁**定** **未**做**
+- V2 #10.6 sensevoice 流**式**路**径** **未**做**（**等** Whisper.cpp/Moonshine
+  评**估** V2 #10.7**）
+
 ## [0.2.10] - 2026-06-05
 
 ### V2 #10 C-5: SenseVoice ASR provider (offline, zh+en+ja+ko+yue)

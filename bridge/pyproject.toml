@@ -1,6 +1,6 @@
 [project]
 name = "xiaozhi-bridge"
-version = "0.2.10"
+version = "0.2.11"
 description = "Lightweight WebSocket bridge for xiaozhi-esp32 devices, with openclaw + M3 as the LLM brain."
 readme = "README.md"
 requires-python = ">=3.12"

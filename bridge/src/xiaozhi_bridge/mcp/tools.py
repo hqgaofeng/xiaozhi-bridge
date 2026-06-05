@@ -8,17 +8,25 @@ Examples:
 
 In our setup, these get bridged to actual device MCP calls OR
 openclaw-side tool calls (for off-board capabilities like IoT).
+
+V2 #7 additions:
+- DeviceToolHandler class: tool that needs to call esp32 (e.g. set_volume
+  forwards the request to esp32 via JSON-RPC and awaits the result)
+- FunctionTool (V1): tool that runs a Python function locally (e.g.
+  for get_device_status which queries session metadata)
 """
 
 from __future__ import annotations
 
 import abc
-import logging
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
-log = logging.getLogger(__name__)
+from ..utils.logging import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -53,6 +61,98 @@ class FunctionTool(ToolHandler):
 
     async def __call__(self, arguments: dict[str, Any]) -> Any:
         return await self.func(**arguments)
+
+
+# --- V2 #7: DeviceToolHandler ---
+
+
+class DeviceToolHandler(ToolHandler):
+    """Tool that calls the device (esp32) over the xiaozhi MCP channel.
+
+    V2 #7 use case: the LLM emits a tool_use like {"name": "self.set_volume",
+    "arguments": {"volume": 50}}. The bridge's MCP layer translates that
+    to a JSON-RPC 2.0 `tools/call` request, ships it to the esp32 inside
+    a `{"type":"mcp","payload":{...}}` WebSocket message, and awaits the
+    matching response (matched by `id`).
+
+    esp32 receives the request in `McpServer::ParseMessage` (its
+    `tools/call` handler) and dispatches to the registered tool callback
+    (e.g. `self.audio_speaker.set_volume` -> `codec->SetOutputVolume`).
+
+    The bridge-side DeviceToolHandler is constructed per session (it
+    holds a reference to that session's WebSocket and a counter for
+    request ids) and registered with the per-session MCPServer.
+
+    Reference: xiaozhi-esp32 main/mcp_server.cc (esp32-side MCP server)
+    and protocol.cc (SendMcpMessage serialization).
+    """
+
+    # Maps a bridge "logical" tool name to the esp32 "physical" name.
+    # Why this exists: the LLM prompts use friendly names like
+    # `set_volume`; esp32 expects `self.audio_speaker.set_volume`.
+    # This mapping is a forward-compat surface: if a future esp32
+    # firmware renames a tool, only the map needs updating.
+    # Marked ClassVar to tell ruff it's intentionally a class-level
+    # constant (not a default field for dataclass-style attributes).
+    ESP32_NAME_MAP: ClassVar[dict[str, str]] = {
+        "self.get_device_status": "self.get_device_status",
+        "self.audio_speaker.set_volume": "self.audio_speaker.set_volume",
+        "self.screen.set_brightness": "self.screen.set_brightness",
+        "self.led.set_rgb": "self.led.set_rgb",
+    }
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        input_schema: dict,
+        send_mcp_call: Callable[[str, dict[str, Any]], asyncio.Future],
+        timeout: float = 5.0,
+    ):
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+        self._send_mcp_call = send_mcp_call
+        self._timeout = timeout
+
+    async def __call__(self, arguments: dict[str, Any]) -> Any:
+        """Forward a tool call to the device and wait for its response.
+
+        Args:
+            arguments: JSON-RPC params.arguments (the tool's input).
+
+        Returns:
+            The esp32-supplied result (typically a string from the
+            MCP content[0].text field, or a parsed JSON object).
+
+        Raises:
+            asyncio.TimeoutError: if the device doesn't respond in
+                ``timeout`` seconds.
+            RuntimeError: on JSON-RPC error response from the device.
+        """
+        # Translate bridge-side name to esp32-side name (forward-compat).
+        esp32_name = self.ESP32_NAME_MAP.get(self.name, self.name)
+
+        # _send_mcp_call returns a Future that resolves when the esp32
+        # sends back the matching JSON-RPC response (matched by id).
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        await self._send_mcp_call(esp32_name, arguments, future)
+        try:
+            result = await asyncio.wait_for(future, timeout=self._timeout)
+        except TimeoutError:
+            log.warning(
+                "device_tool.timeout",
+                bridge_name=self.name,
+                esp32_name=esp32_name,
+                timeout=self._timeout,
+            )
+            raise
+        # If the esp32 returned a JSON-RPC error, surface it.
+        if isinstance(result, dict) and result.get("isError"):
+            err_text = result.get("content", [{}])[0].get("text", "unknown")
+            raise RuntimeError(f"esp32 tool error: {err_text}")
+        return result
 
 
 # --- Registry ---

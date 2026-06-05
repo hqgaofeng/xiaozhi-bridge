@@ -85,17 +85,22 @@ class OpenClawLLM(LLMClient):
     def _build_payload(
         self,
         messages: list[Message],
-        # `tools` and `system` are accepted for interface compatibility
-        # with LLMClient.chat_stream but intentionally IGNORED — openclaw
-        # owns tool dispatch and system prompts (per-agent / per-session).
+        # V2 #7: `tools` and `system` are now forwarded to openclaw.
+        # Previously they were IGNORED (comment: "openclaw owns tool
+        # dispatch"). V2 #7 reverses that for tools, because the bridge
+        # needs to see tool_use in the stream to forward to the device
+        # (esp32 is the actual tool executor). `system` remains ignored
+        # because openclaw injects its own per-agent system prompt.
         tools: list | None = None,
         system: str | None = None,
     ) -> dict:
         api_messages: list[dict] = []
         for msg in messages:
-            # Bridge never sends role=tool or role=system through this client
-            # (openclaw handles those internally), but be defensive.
-            if msg.role in ("system", "tool"):
+            # Bridge never sends role=system through this client
+            # (openclaw handles that internally), but be defensive.
+            # role=tool is allowed: openclaw will thread the prior
+            # tool_call_id through to the LLM as part of the message.
+            if msg.role == "system":
                 continue
             api_messages.append({"role": msg.role, "content": msg.content})
 
@@ -109,6 +114,16 @@ class OpenClawLLM(LLMClient):
         }
         if self.session_key:
             payload["user"] = self.session_key  # `user` wins; session_key only via header
+        # V2 #7: forward tools to openclaw. The OpenAI-compatible chat
+        # completions API expects tools as [{"type":"function","function":{...}}].
+        # We pass them through unchanged (server.py converts from MCP
+        # tool specs to this shape before calling chat_stream).
+        if tools:
+            payload["tools"] = tools
+            # tool_choice: "auto" lets the LLM decide whether to call
+            # a tool. "required" forces a call (we don't use this —
+            # the LLM should fall back to text if no tool fits).
+            payload["tool_choice"] = "auto"
         return payload
 
     def _extra_headers(self) -> dict[str, str]:
@@ -127,8 +142,24 @@ class OpenClawLLM(LLMClient):
     ) -> AsyncIterator[LLMEvent]:
         """Stream chat completion from openclaw.
 
-        Only TEXT and DONE events are emitted. Tool calls (if any) happen
-        inside openclaw and never appear in the stream.
+        V2 #7: TEXT, TOOL_CALL, and DONE events are emitted.
+        - TEXT: incremental text content from the LLM
+        - TOOL_CALL: the LLM decided to invoke a tool (one event per call,
+          emitted when finish_reason='tool_calls')
+        - DONE: generation finished
+        - ERROR: openclaw error
+
+        Tool dispatch is owned by the bridge (not openclaw): when a
+        TOOL_CALL event arrives, the bridge's chat_stream consumer
+        (server.py) forwards it to the appropriate tool executor
+        (FunctionTool for local, DeviceToolHandler for esp32-side).
+        The tool result is then injected back into the LLM context
+        as a role=tool message and a new chat_stream call continues
+        the conversation.
+
+        `tools` and `system` are forwarded to openclaw's chat
+        completions API (V2 #7 changed this; previously tools was
+        IGNORED).
         """
         client = await self._get_client()
         payload = self._build_payload(messages, tools, system)
@@ -148,6 +179,9 @@ class OpenClawLLM(LLMClient):
                     )
                     return
                 finish_reason: str | None = None
+                # V2 #7: accumulator for streaming tool_calls deltas.
+                # Keyed by `index` (LLM may emit multiple parallel calls).
+                tool_acc: dict[int, dict] = {}
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -161,14 +195,67 @@ class OpenClawLLM(LLMClient):
                     except json.JSONDecodeError:
                         continue
                     # OpenAI chat.completion.chunk shape:
-                    # {choices: [{delta: {content?: str, role?: str}, finish_reason?: str}]}
+                    # {choices: [{delta: {content?: str, role?: str,
+                    #                    tool_calls?: [{index, id?, type?,
+                    #                                    function: {name?, arguments?}}]},
+                    #             finish_reason?: str}]}
+                    #
+                    # V2 #7: tool_calls stream incrementally. Each chunk
+                    # adds partial JSON to delta.tool_calls[i].function.arguments.
+                    # We accumulate per-index and emit a TOOL_CALL event
+                    # on finish_reason=tool_calls.
                     for choice in event.get("choices", []):
                         delta = choice.get("delta") or {}
                         content = delta.get("content")
                         if content:
                             yield LLMEvent(kind="text", text=content)
+                        # V2 #7: accumulate tool_calls deltas. We use a
+                        # local dict keyed by index; on a non-tool_calls
+                        # finish_reason (e.g. "stop"), we emit nothing
+                        # (the LLM didn't call a tool). On "tool_calls",
+                        # we emit one TOOL_CALL per accumulated index.
+                        for tc_delta in delta.get("tool_calls") or []:
+                            idx = tc_delta.get("index", 0)
+                            slot = tool_acc.setdefault(idx, {
+                                "id": "",
+                                "name": "",
+                                "arguments": "",
+                            })
+                            if tc_delta.get("id"):
+                                slot["id"] += tc_delta["id"]
+                            fn = tc_delta.get("function") or {}
+                            if fn.get("name"):
+                                slot["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                slot["arguments"] += fn["arguments"]
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
+                            # Emit accumulated tool calls when the LLM
+                            # finishes a tool-calling turn.
+                            if finish_reason == "tool_calls" and tool_acc:
+                                for _idx, slot in sorted(tool_acc.items()):
+                                    # Parse the accumulated JSON args.
+                                    try:
+                                        args = (
+                                            json.loads(slot["arguments"])
+                                            if slot["arguments"]
+                                            else {}
+                                        )
+                                    except json.JSONDecodeError:
+                                        log.warning(
+                                            "openclaw.tool_args_invalid",
+                                            raw=slot["arguments"][:200],
+                                        )
+                                        args = {}
+                                    yield LLMEvent(
+                                        kind="tool_call",
+                                        tool_call={
+                                            "id": slot["id"] or None,
+                                            "name": slot["name"],
+                                            "arguments": args,
+                                        },
+                                    )
+                                tool_acc.clear()
                     # OpenClaw may emit a top-level error chunk
                     if "error" in event:
                         yield LLMEvent(

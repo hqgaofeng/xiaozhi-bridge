@@ -45,7 +45,7 @@ def client(tmp_db: Path) -> TestClient:
 def test_health(client: TestClient) -> None:
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "version": "0.2.10"}
+    assert r.json() == {"ok": True, "version": "0.2.11"}
 
 
 # --- devices (empty by default; populated by integration tests) ---

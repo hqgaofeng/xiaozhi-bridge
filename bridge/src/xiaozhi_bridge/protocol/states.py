@@ -8,6 +8,7 @@ Each connected device has one SessionContext that tracks:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -62,6 +63,15 @@ class SessionContext:
     # Current turn text (filled by ASR, consumed by LLM)
     current_text: str = ""
     current_turn_id: int = 0
+
+    # V2 #7: pending MCP tool calls awaiting device response.
+    # Maps JSON-RPC `id` (int) to a Future that resolves with the
+    # device's JSON-RPC result. The bridge's _send_mcp_call stores
+    # the future here; the message loop resolves it when the device
+    # sends back a JSON-RPC response.
+    pending_mcp_calls: dict[int, asyncio.Future] = field(default_factory=dict)
+    # V2 #7: monotonic counter for generating JSON-RPC request ids.
+    mcp_request_id: int = 0
 
     # Optional metadata
     metadata: dict[str, Any] = field(default_factory=dict)
