@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="xiaozhi-bridge API",
-        version="0.2.5",
+        version="0.2.9",
         description="HTTP API for the xiaozhi-bridge WebSocket bridge.",
         lifespan=lifespan,
     )
@@ -87,7 +87,7 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"ok": True, "version": "0.2.8"}
+        return {"ok": True, "version": "0.2.9"}
 
     # --- devices ---
 
@@ -309,6 +309,85 @@ def _register_routes(app: FastAPI) -> None:
                 await asyncio.sleep(2.0)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # --- xiaozhi-esp32 OTA endpoint (V2 #8 minimal) ---
+    # esp32 firmware boots → POST /api/xiaozhi/ota/ with device info
+    # JSON body → we return config including the WS server URL.
+    # esp32 then WebSocket-Connects the URL we told it.
+    #
+    # Source: xiaozhi-esp32 main/ota.cc ::Ota::CheckVersion()
+    #   - Reads NVS `wifi.ota_url` (or CONFIG_OTA_URL fallback)
+    #   - Sends device info JSON body via POST
+    #   - Parses response, writes `websocket` section to NVS namespace "websocket"
+    #   - The websocket_protocol then reads websocket.url from NVS "websocket"
+    #     namespace — which is how the firmware picks up our WS URL on reboot.
+    @app.post("/api/xiaozhi/ota/")
+    @app.post("/api/xiaozhi/ota")
+    @app.get("/api/xiaozhi/ota/")
+    @app.get("/api/xiaozhi/ota")
+    async def ota_check(request_body: dict | None = None) -> dict:
+        """V2 #8 minimal OTA endpoint: tells the device to WS-connect us.
+
+        The esp32 sends a body like:
+          {
+            "version": 2,
+            "flash_size": 16777216,
+            "psram_size": 8388608,
+            "board": "my-custom-wifi-lcd",
+            "mac_address": "58:e6:c5:6b:9b:54",
+            "language": "zh-CN"
+          }
+        We don't validate it in V2 #8 minimal — just log it and respond
+        with the WS URL. The device's websocket_protocol.cc will then
+        read `websocket.url` from NVS and Connect.
+        """
+        import logging
+        import time
+
+        log = logging.getLogger("xiaozhi_bridge.ota")
+
+        # V2 #8 minimal: log device info (we'll use it for auth in V2 #8.1)
+        if request_body:
+            mac = request_body.get("mac_address", "unknown")
+            board = request_body.get("board", "unknown")
+            flash = request_body.get("flash_size", "?")
+            log.info(
+                "OTA check from board=%s mac=%s flash=%s",
+                board, mac, flash,
+            )
+
+        # V2 #8.1 fix: REMOVE the activation section entirely.
+        #
+        # Why: xiaozhi-esp32 main/ota.cc CheckVersion() reads:
+        #   cJSON* code = cJSON_GetObjectItem(activation, "code");
+        #   if (cJSON_IsString(code)) {
+        #       activation_code_ = code->valuestring;
+        #       has_activation_code_ = true;   ← "00:00:00" triggers this
+        #   }
+        # Then CheckNewVersion() at line ~446:
+        #   if (!HasActivationCode() && !HasActivationChallenge()) { break; }
+        # has_activation_code_=true → no break → ShowActivationCode
+        # shows "请到 xiaozhi.me 添加设备, 验证码 00:00:00" → 10x
+        # Activate() returns ESP_FAIL (no challenge) → infinite while loop.
+        #
+        # V2 #8.0 had `"code": "00:00:00"` which traps the device.
+        # V2 #8.1: omit activation entirely → both flags stay false →
+        # outer while breaks → InitializeProtocol runs → idle → waits
+        # for wake word → OpenAudioChannel() → bridge 8000 hello.
+        return {
+            "websocket": {
+                "url": "wss://jarvis.beallen.top/xiaozhi/v1/",
+            },
+            "server_time": {
+                "timestamp": int(time.time() * 1000),
+                "timezone": "Asia/Shanghai",
+                "timezone_offset_minutes": 8 * 60,
+            },
+            "firmware": {
+                "version": "2.2.6",
+                "url": "",
+            },
+        }
 
 
 # Default app for `uvicorn xiaozhi_bridge.api.main:app`

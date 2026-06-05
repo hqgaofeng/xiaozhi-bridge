@@ -41,6 +41,7 @@ from .protocol import (
 )
 from .protocol.audio import make_codec
 from .tts import get_tts
+from .vad import SileroVADProvider
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +158,35 @@ class XiaozhiBridgeServer:
         self.tts = get_tts(config.tts.provider, config.tts.options)
         self.llm = get_llm("openclaw", config.openclaw.model_dump())
         self.mcp = MCPServer()
+
+        # V2 #8.3: server-side VAD (Silero) for esp32 AFE WebRTC VAD
+        # mode 0 not triggering voice_stop in real-world conditions.
+        # The VAD instance is shared; per-session state is attached to
+        # the session object lazily on first audio frame.
+        vad_cfg = getattr(config, "vad", None)
+        if vad_cfg is not None and vad_cfg.provider == "silero":
+            model_path = vad_cfg.model_path
+            if not model_path:
+                # Default path: bridge/models/silero_vad/data/silero_vad.onnx
+                model_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    "models", "silero_vad", "data", "silero_vad.onnx",
+                )
+            self.vad: SileroVADProvider | None = None
+            if os.path.isfile(model_path):
+                self.vad = SileroVADProvider(
+                    model_path=model_path,
+                    threshold=vad_cfg.threshold,
+                    threshold_low=vad_cfg.threshold_low,
+                    min_silence_duration_ms=vad_cfg.min_silence_duration_ms,
+                    frame_window_threshold=vad_cfg.frame_window_threshold,
+                )
+                self.log.info("vad.loaded", model_path=model_path)
+            else:
+                self.log.warning("vad.model_missing", model_path=model_path)
+        else:
+            self.vad = None
+            self.log.info("vad.disabled", reason="provider!=silero")
 
         # Track active sessions
         self.sessions: dict[str, SessionContext] = {}
@@ -349,6 +379,12 @@ class XiaozhiBridgeServer:
                 self.sessions.pop(session.session_id, None)
                 # Clean up cached codec
                 self._codecs.pop(session.session_id, None)
+                # V2 #8.4: clean up per-session VAD state to avoid leaks
+                if self.vad is not None:
+                    self.vad.reset_session_state(session)
+                # V2 #8.4: cancel any pending wake-grace task
+                if hasattr(self, "_wake_grace_tasks"):
+                    self._cancel_wake_grace(session)
                 self.log.info("session.closed", session_id=session.session_id)
 
     async def _main_loop(
@@ -397,8 +433,16 @@ class XiaozhiBridgeServer:
     ) -> None:
         """Handle an incoming audio frame.
 
-        Only act when in LISTENING state — otherwise we just buffer/ignore.
-        For V1 we just count frames; real ASR will be added in a later step.
+        V2 #8.3: with server-side VAD (Silero) integrated, we no longer
+        rely on esp32's WebRTC VAD to trigger voice_stop. We:
+
+        1. Decode Opus → PCM
+        2. Run server-side VAD on the PCM
+        3. Cache audio only when VAD says voice (or recent voice)
+        4. When VAD detects voice_stop (1s silence), trigger _process_turn
+
+        The VAD is opt-in: if self.vad is None (model missing), we fall
+        back to the V2 #5 behavior of relying on listen.state=stop.
         """
         if session.state != SessionState.LISTENING:
             return
@@ -414,9 +458,38 @@ class XiaozhiBridgeServer:
             self._codecs[session.session_id] = codec
         try:
             pcm = codec.decode(opus_frame)
-            session.append_audio(pcm)
         except Exception as e:
-            self.log.warning("audio.decode_failed", error=str(e))
+            self.log.warning("audio.decode_failed", error=str(e), frame_size=len(opus_frame))
+            return
+
+        # V2 #8.3: server-side VAD
+        if self.vad is not None:
+            have_voice = self.vad.is_vad(session, opus_frame)
+
+            # Cache 10 frames even when no voice — captures sentence start
+            if not have_voice and not session.client_have_voice:
+                session.append_audio(pcm)
+                # Keep only last ~10 frames worth of audio
+                max_keep = 10 * len(pcm)
+                if len(session.pcm_buffer) > max_keep:
+                    del session.pcm_buffer[: -max_keep]
+                return
+
+            session.append_audio(pcm)
+
+            # voice_stop detected → trigger ASR pipeline
+            if session.client_voice_stop:
+                self.log.info(
+                    "vad.voice_stop",
+                    session_id=session.session_id,
+                    pcm_bytes=len(session.pcm_buffer),
+                )
+                # Reset VAD state BEFORE processing (so a new turn can start)
+                self.vad.reset_session_state(session)
+                await self._process_turn(ws, session)
+        else:
+            # No VAD: just buffer and rely on listen.state=stop
+            session.append_audio(pcm)
 
     async def _handle_listen(
         self,
@@ -437,6 +510,20 @@ class XiaozhiBridgeServer:
         if msg.state == "start":
             await self._transition(session, SessionState.LISTENING)
             session.pcm_buffer.clear()
+            # V2 #8.3: reset VAD state and start wake-up grace period
+            # (mirrors official xiaozhi-esp32-server: ignore VAD for 2s
+            # after wake word to avoid false positive from wake word tail)
+            if self.vad is not None:
+                self.vad.reset_session_state(session)
+                session.just_woken_up = True
+                # Schedule grace period end (2s, matches official)
+                import asyncio
+                self._wake_grace_tasks = getattr(self, "_wake_grace_tasks", [])
+                task = asyncio.create_task(
+                    self._end_wake_grace(session),
+                    name=f"wake_grace_{session.session_id}",
+                )
+                self._wake_grace_tasks.append(task)
         elif msg.state == "stop":
             # User stopped recording → run ASR → LLM → TTS pipeline
             await self._process_turn(ws, session)
@@ -444,6 +531,41 @@ class XiaozhiBridgeServer:
             # Wake word detected (with text hint) → just process the text directly
             if msg.text:
                 await self._process_text(ws, session, msg.text)
+
+    async def _end_wake_grace(self, session: SessionContext) -> None:
+        """V2 #8.3: end the 2-second post-wake VAD grace period.
+
+        Mirrors official xiaozhi-esp32-server: just_woken_up=True is
+        set in _handle_listen(start), and reset 2s later to avoid
+        false VAD positives from the wake word audio tail.
+        """
+        import asyncio
+        await asyncio.sleep(2.0)
+        if hasattr(session, "just_woken_up"):
+            session.just_woken_up = False
+            self.log.info("vad.wake_grace_ended", session_id=session.session_id)
+
+    def _cancel_wake_grace(self, session: SessionContext) -> None:
+        """V2 #8.4: cancel the wake-grace task for a session.
+
+        Called from session.closed cleanup to avoid tasks that reference
+        a session after the session has been removed from self.sessions.
+        """
+        if not hasattr(self, "_wake_grace_tasks"):
+            return
+        session_id = session.session_id
+        target_name = f"wake_grace_{session_id}"
+        # Cancel all matching tasks
+        for task in self._wake_grace_tasks:
+            if task.get_name() == target_name and not task.done():
+                task.cancel()
+        # Remove the matching task by NAME (not by done state, since
+        # task.cancel() doesn't immediately set done=True — the task
+        # needs an event loop iteration to actually mark itself done).
+        self._wake_grace_tasks = [
+            t for t in self._wake_grace_tasks
+            if t.get_name() != target_name and not t.done()
+        ]
 
     async def _handle_abort(
         self,
@@ -647,10 +769,31 @@ class XiaozhiBridgeServer:
                 if do_encode:
                     frame = tts_codec.encode(frame)
                 await ws.send(frame)
-        except Exception:
-            self.log.exception("tts.failed")
+        except Exception as e:
+            # V2 #8.4: distinguish ConnectionClosed (esp32 gone) from
+            # real TTS failures. esp32 often disconnects mid-TTS due to
+            # keepalive timeout (LLM 19s thinking), and we don't want
+            # the resulting ConnectionClosedError to pollute the log
+            # as a "tts failure" — the TTS itself succeeded, the
+            # transport just died.
+            if isinstance(e, websockets.exceptions.ConnectionClosed):
+                self.log.warning(
+                    "tts.client_disconnected",
+                    session_id=session.session_id,
+                    code=e.code,
+                    reason=str(e.reason) if e.reason else None,
+                )
+            else:
+                self.log.exception("tts.failed")
 
-        # TTS stop
-        await ws.send(serialize_server_message(
-            TTSMessage(session_id=session.session_id, state="stop")
-        ))
+        # TTS stop — also guarded: if the ws died mid-TTS, we just skip
+        try:
+            await ws.send(serialize_server_message(
+                TTSMessage(session_id=session.session_id, state="stop")
+            ))
+        except websockets.exceptions.ConnectionClosed as e:
+            self.log.warning(
+                "tts.stop.client_disconnected",
+                session_id=session.session_id,
+                code=e.code,
+            )

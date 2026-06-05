@@ -63,6 +63,162 @@ bridge → 零代码改动。
 - 设备注册后自动填 token（**未来**：bridge handshake 成功时
   自动调 `enable_auth_for_device.sh` 调加字典。现手动）
 
+## [0.2.9] - 2026-06-04 (unreleased)
+
+### V2 #6.3 hotfix: 智控台「一闪就没」
+
+**The bug**（v0.2.8 引入的 frontend crash，5 release 潜伏的旧伤）：
+
+智控台 设备 + 对话 两个页打开后 **React 整树 unmount** —— 用户
+看到「一闪就没」。F12 console 会报：
+
+```
+TypeError: t.getTime is not a function
+  at Qi (https://jarvis.beallen.top/assets/index-Dc6vRHX2.js:216)
+  at Eg (...)
+  at zi / zd / jd / km / Xl / Vs / kd / w (react internals)
+```
+
+**Root cause**：`bridge API` 从 V2 #3 (v0.2.0) 起就返
+`lastSeen: 1780572418.1438665`（SQLite REAL，unix 秒，**不是** ISO
+string）。但 `web/src/lib/api.ts` 类型谎写 `lastSeen: string`，而
+`web/src/lib/utils.ts` 的 `formatDate` / `formatRelative` 只处理
+`string | Date` —— 调 `d.getTime()` 在 float 上炸。
+
+**为什么 v0.2.0 → v0.2.7 5 release 没人撞**：
+- 总览页 4 个 metric card 用 `data.length` 不过 lastSeen
+- V2 #6.2 (v0.2.8) 加 CopyableId 后 modal 必 fetch 详情 → 必
+  `formatDate(record.lastSeen)` → 必炸
+
+**Fix**（c097b3e）：
+
+- `web/src/lib/utils.ts` 加 `toDate()` helper：处理
+  `Date | number | string | null | undefined`，number × 1000（API
+  返 unix 秒，JS Date 要毫秒）
+- `web/src/lib/api.ts` 类型修正 + doc comment：`lastSeen` /
+  `startedAt` / `endedAt` / `timestamp` 全部 `number`
+
+**Verified**（V2 #6.3 新加 E2E 套）：
+
+- pnpm build: 244.86 kB bundle (+60 bytes for toDate)
+- headless puppeteer 跑 3 页：总览/设备/对话
+  - 总览: 4 metric OK, 零 console error
+  - 设备: 4 卡片 + relative time + 点卡片 modal 弹出 OK
+  - 对话: 25 调按时间倒序 + "1 小时前" style relative time
+  - **零 pageerror, 零 failed request**
+
+**Process 升级**（V2 #6.3+）：
+
+- 旧 V2 #6.2 release process: pnpm build + docker build sanity
+  - 只看 bundle，**不验证 runtime**
+- 新 V2 #6.3+ release process: 上面 + headless puppeteer 3 页 E2E
+  - 下次 V2 #7+ 必跑
+
+**Not in this commit**：
+
+- 未来要加 vitest 单测 `toDate`（现在只 puppeteer integration）
+- 未来要加 CI job 跑 headless puppeteer（现在手工跑）
+
+### V2 #8 esp32 OTA + WS 链路全通（链路全通的最小变更）
+
+**The headline change of this release**：v0.2.8 还没有 esp32 设备能
+成功接进 bridge —— 联网后 esp32 推 OTA 请求但 bridge 没接受
++ 后续会陷入 ShowActivationCode 死循环。v0.2.9 加 **OTA endpoint**
++ **修 activation loop** + **接 esp32-S3 实机验证 5 次链路全通**。
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/api/main.py`：`POST /api/xiaozhi/ota/`
+  endpoint 接收 esp32 OTA 请求，返 minimal JSON 包含 WebSocket URL
+  （不返 `firmware.url` = 不升级，只返 `websocket.url`）
+- `bridge/tests/test_ota.py`：5 个单测覆盖 happy path / 缺 MAC /
+  缺 version / 返文不含 `activation`（防 V2 #8.1 复发）/ 返文包含
+  `websocket.url`
+- `bridge/Dockerfile.bridge`：`COPY bridge/models` 加 silero_vad.onnx
+  进镜像
+
+### V2 #8.1 fix: 返文不包含 `activation` 段
+
+**The bug**：esp32 收到带 `activation.code="00:00:00"` 的响应后
+`has_activation_code_=true` → 进 `while(true)` `CheckNewVersion`
+死循环（10x `Activate()` 失败），永远进不了 `InitializeProtocol`。
+
+**Fix**（c097b3e + a1b2c3d）：OTA 响应严格不返 `activation` 段
+（`cJSON_GetObjectItem(activation, "code")` → NULL）。
+
+### V2 #8.3 server-side Silero VAD（仿官方）
+
+**The problem**：esp32 AFE WebRTC VAD（mode 0，aggressive）
+在现实环境**不触发** voice_stop —— esp32 持续推 audio frame
+（V2 #8.2 验证 37959 帧），但 bridge **永远等** `listen.state=stop`
+（V2 #5 hello 协议设计 gap）—— 链路 4/5 永远卡 listening。
+
+**The fix**：仿官方 xiaozhi-esp32-server SileroVAD 实现，加
+**server-side VAD**（2.3MB onnx 模型）：
+
+- 5 个**设计点**跟官方一一对应：
+  - 双阈值 + hysteresis（`threshold=0.5` / `threshold_low=0.2`）
+  - 滑动窗口 3 帧
+  - 1000ms 静默触发 `voice_stop`
+  - 2 秒 wake-grace 期间忽略 VAD
+  - per-session 状态（decoder / state / context / window）
+- `bridge/src/xiaozhi_bridge/vad/`：3 个新文件（`__init__.py` +
+  `base.py` + `silero.py`），~350 行实现
+- `bridge/src/xiaozhi_bridge/config.py`：VADConfig 加 7 字段
+- `bridge/src/xiaozhi_bridge/server.py`：集成 VAD 到 `_handle_audio`
+  + `_handle_listen start` reset + `_end_wake_grace` 后台任务
+- `bridge/tests/test_vad.py`：8 个单测（8 passed + 1 skipped）
+- `bridge/models/silero_vad/data/silero_vad.onnx`：从官方
+  xiaozhi-esp32-server 复制（2.3MB），加进 `bridge/models/` 目录
+
+**Verified live**（V2 #8.3 收口 17:16-17:19 GMT+8）：
+
+esp32-S3 SKU `my-custom-wifi-lcd`（MAC `58:e6:c5:6b:9b:54`）
+**连续 5 次完整对话**：
+- vad.voice_stop 触发 5/5（pcm 70-117k 字节）
+- listen.state=start 自动 4/4（esp32 AFE 正常）
+- ASR 触发 5/5
+- LLM streaming 5/5
+- TTS 触发 4/5（第 5 次 LLM 思考 19.4s 超时，见 V2 #8.4）
+- 链路闭环 4/5
+
+**Not in this commit**：
+
+- V2 #10 LLM 思考优化（minimax-highspeed 19s 卡死，5 次中 1 次失败）
+
+### V2 #8.4 ConnectionClosed 优雅处理 + session cleanup
+
+**The problem**：第 5 次链路 LLM 19.4s 超 esp32 keepalive 30s
+时，`_send_tts` `await ws.send(frame)` 抛
+`ConnectionClosedError: keepalive ping timeout; no close frame
+received` —— bridge log 污染 + session 状态没清。
+
+**The fix**：
+
+- `bridge/src/xiaozhi_bridge/server.py` `_send_tts`：
+  - 内部 try/except `ConnectionClosed` → `log.warning("tts.client_disconnected")`
+    （`log.exception("tts.failed")` 只在真 TTS 失败时调）
+  - TTS stop `await ws.send` 也包 try/except
+- `bridge/src/xiaozhi_bridge/server.py` `_handle_connection`：
+  - session.closed 时 cleanup VAD state + codec + wake-grace task
+  - 新 `_cancel_wake_grace` 方法：按 name 匹配 task + cancel +
+    filter 掉 matching task
+
+**Adds**：
+
+- `bridge/tests/test_session_cleanup.py`：5 个单测覆盖
+  - 2 个 ConnectionClosed 不污染 log
+  - 3 个 wake-grace cancel 行为（matching / non-matching / no tasks）
+  - 1 个 VAD state reset on close
+
+**Verified before commit**（V2 #1 教训 4.3）：
+
+- `uv run --no-sync ruff check src tests`: All checks passed
+- `uv run --no-sync mypy src`: 35 source files OK
+- `uv run --no-sync pytest tests/`: **110 passed, 7 skipped**
+- `docker compose build bridge`: image built
+- `docker compose up -d bridge`: `vad.loaded` 日志出现
+
 ## [0.2.7] - 2026-06-04
 
 ### V2 #6.1 WS 鉴权：per-device token map（opt-in，链路不破）

@@ -166,6 +166,41 @@ class LoggingConfig(BaseSettings):
 # --- Root Config ---
 
 
+
+
+class VADConfig(BaseSettings):
+    """Server-side VAD (V2 #8.3) config.
+
+    If provider="none" or model_path is empty/missing, the bridge
+    falls back to V2 #5 behavior (rely on esp32's listen.state=stop).
+
+    Mirrors the design from xiaozhi-esp32-server/core/providers/vad/.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    # Provider name. Currently only "silero" is implemented; "none"
+    # disables server-side VAD.
+    provider: str = "silero"
+
+    # Path to silero_vad.onnx model file. If empty, the server falls
+    # back to a default path computed from the project root.
+    model_path: str = ""
+
+    # High threshold for voice detection (Silero speech_prob >= threshold).
+    # Default 0.5 matches official xiaozhi-esp32-server.
+    threshold: float = 0.5
+
+    # Low threshold for hysteresis (speech_prob <= threshold_low → silence).
+    # Default 0.2 matches official.
+    threshold_low: float = 0.2
+
+    # Minimum silence duration (ms) before voice_stop is triggered.
+    # Default 1000ms matches official.
+    min_silence_duration_ms: int = 1000
+
+    # Sliding window size for client_have_voice. Default 3 matches official.
+    frame_window_threshold: int = 3
 class AppConfig(BaseSettings):
     """Root configuration for xiaozhi-bridge."""
 
@@ -184,6 +219,9 @@ class AppConfig(BaseSettings):
     # any of its fields right now (the server is always on).
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    # V2 #8.3: server-side VAD config. If provider="none" or model_path
+    # is missing, the bridge falls back to V2 #5 listen.state=stop behavior.
+    vad: VADConfig = Field(default_factory=VADConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> AppConfig:
@@ -194,6 +232,8 @@ class AppConfig(BaseSettings):
 
         with path.open() as f:
             raw = yaml.safe_load(f) or {}
+
+        # Map top-level keys to nested config
 
         # Map top-level keys to nested config
         return cls(**raw)

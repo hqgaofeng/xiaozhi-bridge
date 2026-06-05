@@ -1,6 +1,6 @@
 [project]
 name = "xiaozhi-bridge"
-version = "0.2.8"
+version = "0.2.9"
 description = "Lightweight WebSocket bridge for xiaozhi-esp32 devices, with openclaw + M3 as the LLM brain."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -35,6 +35,8 @@ dependencies = [
     "sherpa-onnx>=1.10",        # local ASR (V2 #1) — streaming-zipformer-bilingual ONNX
     "edge-tts>=6.1",           # Microsoft Edge TTS client (V2 #2) — free neural voices
     "pydub>=0.25",             # mp3 → PCM decoder (V2 #2) — wraps ffmpeg
+    "onnxruntime>=1.19",       # Silero VAD inference (V2 #8.3) — server-side VAD
+    "numpy>=1.26",             # Silero VAD tensor ops (V2 #8.3)
 ]
 
 # --- Future (V2 / V3) dependencies (NOT installed yet) ---
@@ -48,6 +50,8 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
+    "numpy>=1.26",  # V2 #8.3: VAD tests need numpy for synth audio
+    "onnxruntime>=1.19",  # V2 #8.3: VAD tests need onnxruntime to load silero model
     "ruff>=0.6",
     "mypy>=1.11",
     "types-PyYAML",

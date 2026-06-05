@@ -32,6 +32,8 @@ RUN uv venv /app/.venv && \
 COPY bridge/src ./src
 COPY bridge/tests ./tests
 COPY bridge/conftest.py ./
+# V2 #8.3: Silero VAD onnx model (2.3MB, used for server-side VAD)
+COPY bridge/models ./models
 
 # ============================================================
 # Stage 2: runtime — minimal image with venv
@@ -52,6 +54,8 @@ COPY --from=builder /app/src /app/src
 COPY --from=builder /app/tests /app/tests
 COPY --from=builder /app/conftest.py /app/conftest.py
 COPY --from=builder /app/pyproject.toml /app/pyproject.toml
+# V2 #8.3: Silero VAD onnx model (2.3MB)
+COPY --from=builder /app/models /app/models
 
 # Set up paths
 ENV PATH="/app/.venv/bin:$PATH"
