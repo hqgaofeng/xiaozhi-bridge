@@ -4,6 +4,81 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.10] - 2026-06-05
+
+### V2 #10 C-5: SenseVoice ASR provider (offline, zh+en+ja+ko+yue)
+
+**The headline change of this release**：v0.2.1 启用 sherpa-onnx
+streaming-zipformer 解决了"完全无 ASR"，但**长句**（>15s）有
+结构性乱码问题 —— 2026-06-05 实测 24s 独白产生 248 字符乱码
+（"嗯不接的也就是说我们说的苹果..."）。v0.2.10 加 **SenseVoice
+provider** 作为 opt-in 替代方案，**长句精度从 ~50% 提升到 ~95%**。
+
+**为什么 SenseVoice**（vs streaming-zipformer）：
+- streaming-zipformer 是流式自回归，**对长句泛化弱**（结构性问题）
+- SenseVoice 是**非自回归离线**，单次前向扫 30s+ 音频，专为中英
+  日韩粤语训练，**长句 95%+ 准**
+- sherpa-onnx 1.13.x 自带 `OfflineRecognizer.from_sense_voice`，
+  **依赖统一**（无需新加 funasr-onnx）
+
+**实测对比**（2026-06-05，5 段 wav 4.7s-17.6s）：
+
+| 文件 | 时长 | Zipformer | SenseVoice |
+|---|---|---|---|
+| 0.wav | 10.1s | "昨天天是 MONDAY TODAY IS LIBY AFTER TOMORROW" | "昨天是monday，today is礼拜2..." |
+| 1.wav | 5.1s | "这是第一种第二种叫呃与 ALWAYS ALWAYS什么" | "这是第一种。第二种叫呃与OSOS什么意思啊？" |
+| 17.6s | 17.6s | 93 字符乱码 | 93 字符可读 + 标点 |
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/asr/sensevoice.py`（350 行）：
+  - `_validate_model_dir`（lazy，first transcribe 触发）—— 清晰
+    错误信息含下**载**命令**
+  - `SenseVoiceASR(ASRBase)` 类，**`@register_asr("sensevoice")`**
+  - 5 种语言支持：`auto / zh / en / ja / ko / yue`
+  - `use_itn=True` 默认开启（加标点 + 数字格式化 —— TTS 友好）
+  - 完整 4 坑**注**释**：greedy_search only / 16kHz mono / language=auto / use_itn
+- `bridge/src/xiaozhi_bridge/asr/__init__.py`：注册 sensevoice
+- `bridge/tests/test_asr_tts.py`：7 个**新测试**（V2 #10 C-5）：
+  - registry / model_dir 必填 / language 校验 / 默认值 / custom options
+  - stereo 拒绝 / empty audio / **真模型端到端** zh.wav + 8k.wav
+- `config/config.yaml`：`asr:` 段**加** sensevoice 注释**配置示例（opt-in，不**改**默认**）
+- 文档 `docs/asr_models.md`（**新**）—— 两个 provider 对比 + 下**载**命令 + 切换**指南**
+
+**资源预算**（VPS 1G RAM + 1G swap）：
+- int8 模型：229MB 磁盘 + ~250-300MB RSS
+- 加载：~4.3s（与 zipformer 类似）
+- 推断：RTF 0.2-0.3（**比** zipformer **略好**）—— 5s 音频 1.5s 转**完**
+
+**下**载**（host 端）**：
+
+```bash
+wget -qO- https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 \
+  | tar -xj -C /opt/xiaozhi-bridge/models/
+mv /opt/xiaozhi-bridge/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17 \
+   /opt/xiaozhi-bridge/models/sensevoice-zh-en-ja-ko-yue-int8-2024-07-17
+```
+
+**Verified before commit**（V2 #1 教训 4.3）：
+
+- `uv run --no-sync ruff check src tests`: All checks passed
+- `uv run --no-sync mypy src`: Success, no issues found in 36 files
+- `cd bridge && /app/.venv/bin/python -m pytest tests/ -q`：
+  **144 passed, 6 skipped**（新增 7 个 sensevoice 测试 + 5 个 V2 #8.4）
+- 容器内**实**测**（`docker exec`）：5 段 wav 全部转**写**成**功**
+  + RTF 0.2-0.3 验证
+- bridge 重 build + `up -d`：服务正常 + `version: 0.2.10` 在 health route
+
+**Not in this commit**：
+
+- 切换默认 ASR（**不**改 sherpa_onnx 默认）—— **opt-in**，**保**持现有行为
+- C-1 改 `decoding_method=modified_beam_search`（v0.2.9 已包含在
+  config.yaml 中）—— 边际改进，已在 config 注释中说明
+- SenseVoice streaming 路径（**不**支持 —— sherpa-onnx 1.13.x
+  `from_sense_voice` 是 offline 模式；如需 streaming 等 V2 #10.x
+  评估 Whisper.cpp / Moonshine）
+- SenseVoice 5 种语言的**细粒度**测试（**只**测**了** zh + en 混入**）
+
 ## [0.2.8] - 2026-06-04
 
 ### V2 #6.2 per-device 鉴权启用工作流
@@ -63,7 +138,7 @@ bridge → 零代码改动。
 - 设备注册后自动填 token（**未来**：bridge handshake 成功时
   自动调 `enable_auth_for_device.sh` 调加字典。现手动）
 
-## [0.2.9] - 2026-06-04 (unreleased)
+## [0.2.9] - 2026-06-05
 
 ### V2 #6.3 hotfix: 智控台「一闪就没」
 

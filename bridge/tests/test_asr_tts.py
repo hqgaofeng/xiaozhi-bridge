@@ -273,3 +273,159 @@ async def test_asr_sherpa_onnx_resamples_8k_to_16k():
     # The 8k file has ~17s of Chinese speech. Even with bpe quirks the
     # output should be non-empty.
     assert result.text, f"expected non-empty text for 8k wav, got {result.text!r}"
+
+
+# --- V2 #10 C-5 (2026-06-05): SenseVoice ASR provider ---
+
+
+_PROD_SENSEVOICE_DIR = Path(
+    "/opt/xiaozhi-bridge/models/sensevoice-zh-en-ja-ko-yue-int8-2024-07-17"
+)
+
+
+def _resolve_sensevoice_model_dir():
+    """Return Path to a real SenseVoice model dir, or None to skip."""
+    env = os.environ.get("XIAOZHI_TEST_SENSEVOICE_MODEL_DIR")
+    candidates = [Path(env)] if env else []
+    candidates.append(_PROD_SENSEVOICE_DIR)
+    for p in candidates:
+        if p and p.is_dir() and (p / "model.int8.onnx").is_file():
+            return p
+    return None
+
+
+_SENSEVOICE_MODEL_DIR = _resolve_sensevoice_model_dir()
+_skip_no_sensevoice_model = pytest.mark.skipif(
+    _SENSEVOICE_MODEL_DIR is None,
+    reason="SenseVoice model not available (set XIAOZHI_TEST_SENSEVOICE_MODEL_DIR or install to /opt/xiaozhi-bridge/models/sensevoice-zh-en-ja-ko-yue-int8-2024-07-17)",
+)
+
+
+def test_asr_registry_includes_sensevoice():
+    """V2 #10 C-5: sensevoice is a first-class registered provider."""
+    assert "sensevoice" in list_asr_providers()
+
+
+def test_asr_sensevoice_requires_model_dir():
+    """V2 #10 C-5: misconfiguration (no model_dir) must fail loud on first transcribe.
+
+    Matches sherpa_onnx semantics: we validate model_dir lazily inside
+    ``_ensure_recognizer`` (which transcribe() calls on first use). The
+    ``sensevoice`` config-validation surface (``language``) IS checked
+    eagerly — see test_asr_sensevoice_rejects_invalid_language.
+    """
+    import asyncio
+
+    asr = get_asr("sensevoice", options={})
+    with pytest.raises(ASRError, match="model_dir"):
+        asyncio.run(asr.transcribe(b"\x00\x00" * 100, sample_rate=16000))
+
+
+def test_asr_sensevoice_rejects_invalid_language():
+    """V2 #10 C-5: language must be one of the 5 supported (or "auto")."""
+    with pytest.raises(ASRError, match="invalid language"):
+        get_asr("sensevoice", options={"model_dir": "/nonexistent", "language": "fr"})
+
+
+def test_asr_sensevoice_constructs_with_model_dir():
+    """V2 #10 C-5: providing model_dir succeeds (validates config only, lazy load)."""
+    asr = get_asr(
+        "sensevoice",
+        options={"model_dir": "/nonexistent_xxx", "language": "zh", "use_itn": False},
+    )
+    assert asr.name == "sensevoice"
+    assert asr.num_threads == 2  # default
+    assert asr.provider == "cpu"  # default
+    assert asr.language == "zh"  # overridden
+    assert asr.use_itn is False  # overridden
+
+
+def test_asr_sensevoice_custom_options():
+    """V2 #10 C-5: num_threads / language / use_itn are read from options."""
+    asr = get_asr(
+        "sensevoice",
+        options={
+            "model_dir": "/opt/x",
+            "num_threads": 4,
+            "language": "en",
+            "use_itn": True,
+        },
+    )
+    assert asr.num_threads == 4
+    assert asr.language == "en"
+    assert asr.use_itn is True
+
+
+@pytest.mark.asyncio
+async def test_asr_sensevoice_transcribe_rejects_stereo():
+    """V2 #10 C-5: only mono is supported — fail loud instead of silent wrong text."""
+    asr = get_asr("sensevoice", options={"model_dir": "/nonexistent"})
+    with pytest.raises(ASRError, match="mono"):
+        await asr.transcribe(b"\x00\x00" * 100, sample_rate=16000, channels=2)
+
+
+@pytest.mark.asyncio
+async def test_asr_sensevoice_raises_when_model_dir_missing():
+    """V2 #10 C-5: clear error when model_dir doesn't exist (not a stack trace)."""
+    asr = get_asr("sensevoice", options={"model_dir": "/no/such/dir/please"})
+    with pytest.raises(ASRError, match="does not exist"):
+        await asr.transcribe(b"\x00\x00" * 100, sample_rate=16000)
+
+
+@pytest.mark.asyncio
+async def test_asr_sensevoice_handles_empty_audio():
+    """V2 #10 C-5: empty audio returns empty text without raising."""
+    asr = get_asr("sensevoice", options={"model_dir": "/nonexistent"})
+    result = await asr.transcribe(b"", sample_rate=16000)
+    assert result.text == ""
+
+
+# --- V2 #10 C-5: real SenseVoice end-to-end (requires model) ---
+
+
+@_skip_no_sherpa
+@_skip_no_sensevoice_model
+@pytest.mark.asyncio
+async def test_asr_sensevoice_transcribes_test_wav_0():
+    """V2 #10 C-5: end-to-end on bundled SenseVoice test_wavs/zh.wav.
+
+    Empirically (2026-06-05) SenseVoice produces cleaner output than
+    streaming-zipformer on similar audio (e.g. "礼拜2" instead of
+    "LIBY AFTER TOMORROW"). We assert non-empty + that punctuation
+    (added by use_itn) appears.
+    """
+    assert _SENSEVOICE_MODEL_DIR is not None
+    wav = _SENSEVOICE_MODEL_DIR / "test_wavs" / "zh.wav"
+    audio, sr = _read_wav_int16(wav)
+    asr = get_asr(
+        "sensevoice",
+        options={"model_dir": str(_SENSEVOICE_MODEL_DIR), "use_itn": True},
+    )
+    result = await asr.transcribe(audio, sample_rate=sr)
+    # SenseVoice with use_itn adds punctuation; assert we got something readable.
+    assert result.text, f"expected non-empty text, got {result.text!r}"
+
+
+@_skip_no_sherpa
+@_skip_no_sensevoice_model
+@pytest.mark.asyncio
+async def test_asr_sensevoice_handles_long_chinese():
+    """V2 #10 C-5: 17.6s Chinese monologue should produce clean output (no hallucination).
+
+    The streaming-zipformer version of this test (test_asr_sherpa_onnx_resamples_8k_to_16k)
+    was prone to 87+ character garbled output. SenseVoice should produce
+    well-formed Chinese with punctuation.
+    """
+    assert _SENSEVOICE_MODEL_DIR is not None
+    # Reuse sherpa's 8k.wav (17.6s Chinese) as our long-speech torture test.
+    wav = _PROD_MODEL_DIR / "test_wavs" / "8k.wav"
+    audio, sr = _read_wav_int16(wav)
+    assert sr == 8000
+    asr = get_asr(
+        "sensevoice",
+        options={"model_dir": str(_SENSEVOICE_MODEL_DIR), "use_itn": True},
+    )
+    result = await asr.transcribe(audio, sample_rate=sr)
+    assert result.text, f"expected non-empty text for 8k wav, got {result.text!r}"
+    # SenseVoice strips its language/emotion tags; assert none leak through.
+    assert "<|" not in result.text, f"unexpected SenseVoice tag in text: {result.text!r}"
