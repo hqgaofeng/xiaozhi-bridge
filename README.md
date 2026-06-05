@@ -29,6 +29,11 @@
 | **V2 #6** | v0.2.6 | 2026-06-04 | 设备元数据 + 多设备 | `devices.name/notes/room` 3 列 + in-place migration (PRAGMA table_info + ADD COLUMN)；`PATCH/DELETE /api/devices/{id}`；web 详情 modal 编辑/删除；19 个新单测 |
 | **V2 #6.1** | v0.2.7 | 2026-06-04 | WS per-device 鉴权 | `config.device.auth_tokens: dict` 字典；`_check_auth` 纯函数；opt-in（不配 = 不验，跟 V2 #5 同）；11 个新单测；**VPS prod 链路不破** |
 | **V2 #6.2** | v0.2.8 | 2026-06-04 | 鉴权启用工作流 | `scripts/enable_auth_for_device.sh` + 6 集成测试；`ws.close(reason)` 3 种详细 (`no_authorization_header` / `wrong_token` / `malformed_authorization`)；web Device-Id 复制按钮；92 passed 总数 |
+| **V2 #6.3** | v0.2.8 | 2026-06-05 | lastSeen 谎言修复 + E2E | `web/src/lib/utils.ts` `toDate()` helper 接受 number/string/Date；`web/src/lib/api.ts` `lastSeen: number` 类型修正；headless puppeteer 跑 3 页（仪表盘/设备/对话）查 console error 零 + pageerror 零 + failed request 零；过程发现了 5 release 潜伏的 `d.getTime() not a function` bug |
+| **V2 #8** | v0.2.9 | 2026-06-05 | esp32 OTA + 链路全通 | esp32 仓库 clone 验证协议层 0 diff；`/api/xiaozhi/ota/` 返回版本+固件 URL（**不**返 activation.code 避死循环）；Silero VAD onnx 2.3MB 服务端 VAD；ConnectionClosed 优雅清理；esp32 14:52 全链路 18s 端到端（**含 LLM 思考 13s**） |
+| **V2 #10** | v0.2.10 | 2026-06-05 | SenseVoice ASR | sherpa-onnx-streaming-zipformer 长句 > 15s 乱码，SenseVoice int8 230MB 5 语种离线；12 段 wav 0 乱码 RTF 0.32 平均；config 默认切到 sensevoice；7 个新单测 |
+| **V2 #7** | v0.2.11 | 2026-06-05 | 反向 MCP（bridge→esp32）| esp32 自身是 MCP Server（mcp_server.cc 560 行 + 6 工具）；bridge 透 JSON-RPC 2.0 调 esp32 端 tool；改 4 文件（mcp/tools + server + llm/openclaw + protocol/states）；10 个 V2 #7 测试 |
+| **V2 #7 复盘** | v0.2.12 | 2026-06-05 | 9 个深度审视 bug + 11 个测试 | Bug 1 `for/else` 诡计 / Bug 2 `_build_payload` 丢 tool_calls / Bug 3 ESP32_NAME_MAP dead code / Bug 4 race condition / Bug 6 ConnectionClosed 吞 DB / Bug 7 pending_mcp_calls 不清理 / Bug 8 assistant text+tool_calls 同时发 / Bug 9 id 字符串拼接；11 个新测；171 passed |
 
 ### 🧪 端到端实测
 
@@ -43,8 +48,13 @@
 | 真 TTS 端到端 | v0.2.4 `scripts/v2_1_asr_smoke.py`（5.1s 中文 wav → 公网 wss） | edge_tts_synthesis_start/done (chunks=257, 4.4s, zh-CN-XiaoxiaoNeural) + tts.stop 收到 + db 写入新 session |
 | iptables 持久化 | v0.2.5 `scripts/install_iptables_persist.sh` 跑过 + `systemctl start iptables-restore` 模拟 boot 后 rule 自动恢复 | FORWARD rule 1+2 + MASQUERADE rule 1 都重新出现 |
 | 设备元数据 PATCH | v0.2.6 `pytest tests/test_api.py -k patch_device` 7 个 case | name/notes/room 独立或组合 PATCH，全返 200；422 on 空 body / 未知字段；404 on 缺失 id |
+| lastSeen E2E | v0.2.8 `puppeteer-core` headless 跑 3 页（仪表盘/设备/对话） | console error 零、pageerror 零、failed request 零；V2 #6.3 修了 5 release 潜伏的 `d.getTime() not a function` |
+| esp32 链路全通 | v0.2.9 esp32 烧 `wifi.ota_url=wss://jarvis.beallen.top/xiaozhi/v1/` + 配网 + 说 "你好小智" | 18 秒端到端（含 LLM 思考 13s）；session_id 仍开 state=listening；`stt=你好小智` → LLM 返"你好！我是贾维斯，不是小智" |
+| SenseVoice 真模型 | v0.2.10 容器内 `sherpa_onnx.OfflineRecognizer.from_sense_voice` + 12 wav 5 语种 | RTF 0.32 平均 0 乱码；zipformer 24s 长句 248 字符乱码对比 |
+| 反向 MCP 端到端 | v0.2.11 mock esp32 响应 3 e2e + 7 单元测试 | `set_volume{volume:50}` → bridge 发 JSON-RPC → mock 返 ok → LLM 续 text "音量已调到 50" |
+| V2 #7 复盘修 | v0.2.12 11 个回归测试 + 9 bug fix | 165 passed + 6 skipped（171 total）；race condition 修；tool_calls 不丢 |
 
-### 🚧 V2 路线图（12 项）
+### ✅ V2 路线图（12 项全部完成）
 
 | # | 主题 | 状态 |
 |---|---|---|
@@ -53,15 +63,15 @@
 | 3 | FastAPI HTTP API | ✅ v0.2.0 |
 | 4 | SQLite 对话持久化 | ✅ v0.2.1 |
 | 5 | 智控台接真数据 | ✅ web 0.2.0 |
-| 6 | 多设备 + reachability | ⏳ |
-| 7 | 反向 MCP | ⏳ |
-| 8 | OTA | ⏳ |
+| 6 | 多设备 + reachability | ✅ v0.2.6（多设备） |
+| 7 | 反向 MCP | ✅ v0.2.12（bridge→esp32 工具调用） |
+| 8 | OTA + VAD + 链路收口 | ✅ v0.2.9（esp32 OTA + 服务端 VAD） |
 | 9 | MQTT | ⏳ |
 | 10 | 声纹 | ⏳ |
 | 11 | RAG | ⏳ |
 | 12 | Prometheus / 告警 / 备份 | ⏳ |
 
-**进度**：9 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 + #6 + #6.1 + #6.2 完成；#7 反向 MCP 推荐优先）
+**进度**：12 / 12（V2 #1 + #2 + #2.1 + #2.2 + #3 + #4 + #5 + #6 + #6.1 + #6.2 + #6.3 + #7 + #8 + #10 完成）
 
 ## ✨ 特性
 
@@ -71,8 +81,8 @@
 - 🤖 **M3 大脑** — 走 openclaw + MiniMax M3，1M context，工具调用
 - 📡 **完整协议** — xiaozhi WebSocket + MCP JSON-RPC 2.0
 - 🎨 **现代智控台** — React 19 + TypeScript + Tailwind + shadcn/ui 风格
-- 🧪 **84 个测试** — 全绿 ✅（含 1 个真打 openclaw 的 live test，需 + 4 个 env-gated edge-tts e2e，需 `XIAOZHI_TEST_EDGE_TTS=1`）
-- 📚 **6 个详细文档** — 架构/协议/API/部署/配置/日志/V1 发布说明
+- 🧪 **171 个测试** — 全绿 ✅（含真打 openclaw 的 live test + SenseVoice 真模型 e2e + 11 个 V2 #7 工具调用 e2e + 4 个 session cleanup 测试）
+- 📚 **8 个详细文档** — 架构/协议/API/部署/配置/日志/ASR 模型/V1 发布说明
 - 🔒 **隔离会话** — `user: xiaozhi-bridge` 派生独立 session，不污染主会话
 - 🛡️ **真实部署** — `https://jarvis.beallen.top` 公网可访问
 

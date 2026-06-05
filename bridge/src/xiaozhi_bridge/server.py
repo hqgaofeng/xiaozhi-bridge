@@ -394,6 +394,23 @@ class XiaozhiBridgeServer:
                 # V2 #8.4: cancel any pending wake-grace task
                 if hasattr(self, "_wake_grace_tasks"):
                     self._cancel_wake_grace(session)
+                # V2 #7 cleanup: unregister device-tool handlers owned
+                # by this session so the global registry doesn't leak
+                # stale ws/session closures across reconnects. Until we
+                # move to a per-session MCP server (V2 #7.7), this is
+                # the safest mitigation against cross-session races.
+                if hasattr(self, "_session_tool_owners"):
+                    self._cleanup_session_tools(session.session_id)
+                # V2 #7: cancel any pending MCP futures that never got
+                # a response (esp32 disconnected mid-tool-call). This
+                # prevents "Task was destroyed but it is pending" warnings
+                # at process exit and frees the dict promptly.
+                for req_id, future in list(session.pending_mcp_calls.items()):
+                    if not future.done():
+                        future.set_exception(
+                            RuntimeError(f"session closed before mcp response (id={req_id})")
+                        )
+                session.pending_mcp_calls.clear()
                 self.log.info("session.closed", session_id=session.session_id)
 
     async def _main_loop(
@@ -683,26 +700,34 @@ class XiaozhiBridgeServer:
         bound to this session's ws. When the LLM emits a tool_use
         for one of these names, the bridge ships a JSON-RPC
         `tools/call` to esp32 and awaits the response.
+
+        The MCP tool registry is process-global, so we track which
+        session owns which handlers and clean them up on disconnect
+        (see `_cleanup_session_tools`). This prevents stale handlers
+        from older sessions leaking into new ones.
         """
         from .mcp.tools import DeviceToolHandler, register_tool
+
+        # Track per-session tool ownership for cleanup at session close.
+        if not hasattr(self, "_session_tool_owners"):
+            self._session_tool_owners = {}
+        owned: list[str] = []
 
         async def _send(tool_name: str, arguments: dict, future: asyncio.Future) -> None:
             await self._send_mcp_call(ws, session, tool_name, arguments, future)
 
-        # Only register the handlers (registry is process-global). The
-        # ws/session closure ensures each call goes to the right device.
-        # If multiple sessions are active, the registry holds the
-        # LATEST registered handler — we accept this V1 simplification
-        # because the bridge currently serves 1 device at a time per
-        # process. (V2 #7.x: per-session MCP server if multi-device.)
-        register_tool(DeviceToolHandler(
-            name="self.get_device_status",
+        def _register(handler: DeviceToolHandler) -> None:
+            register_tool(handler)
+            owned.append(handler.name)
+
+        _register(DeviceToolHandler(
+            name="get_device_status",
             description="获取设备当前状态（音量、亮度、Wi-Fi、电池等）",
             input_schema={"type": "object", "properties": {}},
             send_mcp_call=_send,
         ))
-        register_tool(DeviceToolHandler(
-            name="self.audio_speaker.set_volume",
+        _register(DeviceToolHandler(
+            name="set_volume",
             description="设置扬声器音量（0-100）。修改后 esp32 会即时生效。",
             input_schema={
                 "type": "object",
@@ -713,8 +738,8 @@ class XiaozhiBridgeServer:
             },
             send_mcp_call=_send,
         ))
-        register_tool(DeviceToolHandler(
-            name="self.screen.set_brightness",
+        _register(DeviceToolHandler(
+            name="set_brightness",
             description="设置屏幕亮度（0-100）。如果当前亮度未知，先调 get_device_status。",
             input_schema={
                 "type": "object",
@@ -725,11 +750,37 @@ class XiaozhiBridgeServer:
             },
             send_mcp_call=_send,
         ))
+        # Persist ownership so cleanup can find the right tool set.
+        self._session_tool_owners[session.session_id] = owned
         self.log.info(
             "device_tools.registered",
             session_id=session.session_id,
             tools=["get_device_status", "set_volume", "set_brightness"],
         )
+
+    def _cleanup_session_tools(self, session_id: str) -> None:
+        """V2 #7: unregister the device-tool handlers owned by ``session_id``.
+
+        Called from the connection's ``finally`` block to prevent stale
+        handlers (with old ws/session closures) from leaking into
+        future sessions. This is a stopgap until V2 #7.7 lands
+        per-session MCP servers.
+        """
+        if not hasattr(self, "_session_tool_owners"):
+            return
+        from .mcp.tools import unregister_tool
+        owned = self._session_tool_owners.pop(session_id, [])
+        for name in owned:
+            try:
+                unregister_tool(name)
+            except Exception:
+                self.log.warning("device_tool.unregister_failed", name=name)
+        if owned:
+            self.log.info(
+                "device_tools.unregistered",
+                session_id=session_id,
+                tools=owned,
+            )
 
     # --- Pipeline ---
 
@@ -865,11 +916,20 @@ class XiaozhiBridgeServer:
         full_text_parts: list[str] = []
         try:
             for _ in range(5):  # max tool-use iterations
+                tool_dispatched = False
+                # Track the text the LLM produced in THIS iteration,
+                # so we can attach it to the assistant tool_calls turn
+                # (OpenAI API contract: if a turn has both text and
+                # tool_calls, both must be present in the next request
+                # — sending tool_calls alone causes 400 errors on
+                # some backends).
+                iter_text_parts: list[str] = []
                 async for event in self.llm.chat_stream(
                     messages=messages, tools=tools_payload,
                 ):
                     if event.kind == "text" and event.text:
                         full_text_parts.append(event.text)
+                        iter_text_parts.append(event.text)
                     elif event.kind == "tool_call" and event.tool_call:
                         # LLM wants to invoke a tool. Forward it.
                         tc = event.tool_call
@@ -883,9 +943,14 @@ class XiaozhiBridgeServer:
                         # messages (required for OpenAI tool-use API
                         # contract: every tool result must be preceded
                         # by the matching assistant tool_calls turn).
+                        # If the LLM produced text BEFORE the tool call
+                        # (common when the LLM says "let me check..."),
+                        # we must include it in `content`; some
+                        # backends reject tool_calls-only turns.
+                        iter_text = "".join(iter_text_parts)
                         messages.append(LLMMessage_(
                             role="assistant",
-                            content="",
+                            content=iter_text,
                             tool_calls=[{
                                 "id": tc.get("id") or f"call_{session.current_turn_id}",
                                 "type": "function",
@@ -906,22 +971,20 @@ class XiaozhiBridgeServer:
                             content=tool_result_text,
                             tool_call_id=tc.get("id") or f"call_{session.current_turn_id}",
                         ))
-                        # Break out of the inner stream to start a new
-                        # chat_stream with the augmented messages (the
-                        # LLM now sees the tool result and can decide
-                        # to call another tool or produce text).
+                        # Set flag to indicate we dispatched a tool
+                        # and need another chat_stream iteration.
+                        tool_dispatched = True
                         break
                     elif event.kind == "done":
                         break
                     elif event.kind == "error":
                         self.log.error("llm.error", error=event.error)
                         break
-                else:
-                    # Inner stream completed without tool_call break.
-                    # This means we got a final text response — done.
+                # If the inner stream finished without dispatching a
+                # tool, we're done with the outer loop.
+                if not tool_dispatched:
                     break
-                # If we broke out because of a tool_call, continue the
-                # outer loop with a fresh chat_stream.
+                # Otherwise loop again with the augmented messages.
         except Exception:
             self.log.exception("llm.stream_failed")
             await self._send_tts(ws, session, "抱歉，我的大脑出错了。")
@@ -942,8 +1005,18 @@ class XiaozhiBridgeServer:
             )
         ))
 
-        # 3) TTS — stream the text
-        await self._send_tts(ws, session, full_text)
+        # 3) TTS — stream the text. If the device disconnects mid-TTS
+        # (V2 #8.4), _send_tts surfaces ConnectionClosed; we still
+        # want to persist the assistant turn to DB before the
+        # connection's finally block tears down the session.
+        try:
+            await self._send_tts(ws, session, full_text)
+        except websockets.exceptions.ConnectionClosed:
+            self.log.info(
+                "tts.connection_closed",
+                session_id=session.session_id,
+            )
+            # Fall through to DB persistence and IDLE.
 
         # V2 #3: persist the turn (user text + assistant text) to sqlite
         if self._db is not None:

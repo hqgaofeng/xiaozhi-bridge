@@ -20,8 +20,9 @@
 **用 sensevoice**。非自回归离线处理，长句 95%+ 准，自带标点 + 数字格式化。
 
 ### 不确定
-先用默认（sherpa_onnx），看日志里 `sherpa_onnx.transcribed` 的 `text_preview` 是否有大量乱码。  
-**有乱码** → 切 sensevoice。**没乱码** → 保持 sherpa_onnx（更省内存、加载更快）。
+先用默认（v0.2.10+ **sensevoice**），看日志里 `sensevoice.transcribed` 的 `text_preview`。  
+**需**要**低**延**迟** + **短**句**流**式**（**< 10s**）** → 切回 sherpa_onnx（v0.2.10 之**前**默**认**）。  
+**需**要**更**省**内**存**（**sherpa_onnx 200MB vs sensevoice 230MB**）** → 切回 sherpa_onnx。
 
 ## 切换方法
 

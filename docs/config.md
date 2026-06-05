@@ -71,29 +71,49 @@ ASR provider 配置（可插拔）。
 | 名称 | 说明 | 状态 |
 |---|---|---|
 | `mock` | 返固定/随机文本 | V1 |
-| `sherpa_onnx` | 本地 ONNX streaming Zipformer (双语 zh+en)，CPU 推理 | V2 #1（默认） |
+| `sherpa_onnx` | 本地 ONNX streaming Zipformer (双语 zh+en)，CPU 推理 | V2 #1（v0.2.10 前默认） |
+| `sensevoice` | 本地 ONNX 离线 SenseVoice (5 语种 zh+en+ja+ko+yue)，CPU 推理 | **V2 #10（v0.2.10+ 默认）** |
 | `cloud` | 云 API 骨架（Aliyun/Tencent/iFlytek/Volcengine） | 未实现（V2 #X） |
 
 ```yaml
+# V2 #10 默认（v0.2.10+）
 asr:
-  provider: sherpa_onnx   # v0.2.2 起默认；改 "mock" 走虚抑
+  provider: sensevoice
   options:
-    # sherpa_onnx 必填：模型目录
-    # 需含 tokens.txt + encoder/decoder/joiner .onnx（fp32 或 int8 都可）
-    # + bpe.vocab（bpe 训练的模型必需要）
-    model_dir: /opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+    # sensevoice 必填：模型目录
+    # 需含 model.int8.onnx（228MB） + tokens.txt（308KB）
+    model_dir: /opt/xiaozhi-bridge/models/sensevoice-zh-en-ja-ko-yue-int8-2024-07-17
     # 可选（默认见括号）：
     # num_threads: 2         # ONNX runtime 线程数
-    # decoding_method: greedy_search  # 或 modified_beam_search
+    # language: auto         # auto | zh | en | ja | ko | yue
+    # use_itn: true          # 开启后输出带标点 + 数字格式化
     # provider: cpu          # ONNX runtime provider（cuda 预留 V3+）
-    # modeling_unit: bpe     # 该模型是 bpe 训练，默认已为 bpe
-    # bpe_vocab: ...         # 不设则自动从 model_dir/bpe.vocab 读
+
+# V2 #1 退路：短句 < 10s + 低延迟场景
+# asr:
+#   provider: sherpa_onnx
+#   options:
+#     # sherpa_onnx 必填：模型目录
+#     # 需含 tokens.txt + encoder/decoder/joiner .onnx（fp32 或 int8 都可）
+#     # + bpe.vocab（bpe 训练的模型必需要）
+#     model_dir: /opt/xiaozhi-bridge/models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+#     # 可选（默认见括号）：
+#     # num_threads: 2         # ONNX runtime 线程数
+#     # decoding_method: greedy_search  # 或 modified_beam_search（C-1 边际改进）
+#     # provider: cpu          # ONNX runtime provider（cuda 预留 V3+）
+#     # modeling_unit: bpe     # 该模型是 bpe 训练，默认已为 bpe
+#     # bpe_vocab: ...         # 不设则自动从 model_dir/bpe.vocab 读
 ```
 
-> **V2 #1 资源预算**（VPS 1G RAM + 1G swap）：
+> **V2 #1 资源预算**（VPS 1G RAM + 1G swap，sherpa_onnx）：
 > - fp32 模型：加载 3.6s，稳态 ~150-200MB RSS，RTF ~0.43
 > - int8 模型：加载更快，RSS 更低，默认自动选 int8
 > - docker compose bridge 容器 mem_limit 已从 200m 调为 500m
+>
+> **V2 #10 资源预算**（sensevoice）：
+> - int8 模型：~250-300MB RSS，RTF 0.2-0.3，**长句（> 15s）0 乱码**
+> - 5 语种（zh/en/ja/ko/yue）支持，比 sherpa_onnx 强 3 倍
+> - **VPS prod 实测**：12 段 wav（5 语种 + 4.7-30s 长度）全 0 乱码
 
 ```yaml
 # 退路：虚抑 ASR（不加载模型，占位用）
@@ -171,16 +191,19 @@ device:
 
 ### mcp
 
-MCP 端点配置。
+MCP 端点配置（v0.2.11+）。
 
 ```yaml
 mcp: {}
 ```
 
+> **V2 #7 状态（v0.2.11）**：MCP 工具注**册**表**是**进**程**全**局**的**（`xiaozhi_bridge.mcp.tools._REGISTRY`），
+> **不**需**要** config 配**置**。bridge 在**每**个** session 创**建**时** `_register_device_tools` 动**态**注**册** 3 个 esp32 端**工**具**（**get_device_status / set_volume / set_brightness**）。
+> 会**话**关**闭**时** `_cleanup_session_tools` 动**态**解**绑**。**未**来** V2 #7.7 per-session MCP server 时**配**置**会**改**为**每**个** session 独**立**注**册**表**。
+>
 > **V2 #4 起变化**：`mcp.enabled` 和 `mcp.auto_initialize`
 > 已删除。V1 后期决定不暴露 MCP（firmware 端的那路没起来，
-> 跟 V2 #7 “reverse MCP” 一起重做）。现在 `mcp` 段是个空占位
-> `{}` ，后续 V2 #7 会重新补上真正的 MCP 路由。
+> 跟 V2 #7 “reverse MCP” 一起重做）。
 
 ### logging
 

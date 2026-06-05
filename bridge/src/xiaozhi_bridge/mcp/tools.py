@@ -95,10 +95,10 @@ class DeviceToolHandler(ToolHandler):
     # Marked ClassVar to tell ruff it's intentionally a class-level
     # constant (not a default field for dataclass-style attributes).
     ESP32_NAME_MAP: ClassVar[dict[str, str]] = {
-        "self.get_device_status": "self.get_device_status",
-        "self.audio_speaker.set_volume": "self.audio_speaker.set_volume",
-        "self.screen.set_brightness": "self.screen.set_brightness",
-        "self.led.set_rgb": "self.led.set_rgb",
+        "get_device_status": "self.get_device_status",
+        "set_volume": "self.audio_speaker.set_volume",
+        "set_brightness": "self.screen.set_brightness",
+        "set_rgb": "self.led.set_rgb",
     }
 
     def __init__(
@@ -165,6 +165,23 @@ def register_tool(handler: ToolHandler) -> None:
     """Register a tool handler."""
     _REGISTRY[handler.name] = handler
     log.debug("tool.registered", name=handler.name)
+
+
+def unregister_tool(name: str) -> bool:
+    """Remove a tool handler from the registry by name.
+
+    Returns True if a handler was removed, False if it wasn't
+    registered. Used by server.py to clean up session-owned device
+    tools when a session disconnects (V2 #7).
+
+    The global registry is a V1 simplification; the proper fix is
+    per-session MCP servers (V2 #7.7).
+    """
+    if name in _REGISTRY:
+        del _REGISTRY[name]
+        log.debug("tool.unregistered", name=name)
+        return True
+    return False
 
 
 def register_function(

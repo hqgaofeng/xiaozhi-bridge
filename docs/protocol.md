@@ -167,24 +167,33 @@ xiaozhi 设备与后端通过 **WebSocket** 通信，使用：
 
 ## 5. MCP 协议（JSON-RPC 2.0）
 
-> **V1 方向**：MCP 协议原本是设备作为 MCP **server**、后端作为 MCP **client**。
+> **V1 + V2 #7 方向**：MCP 协议原本是设备作为 MCP **server**、后端作为 MCP **client**。
 > 在 xiaozhi-bridge 里，bridge 既是 **server**（向设备提供 MCP 端点、让设备能调 `get_time`/`get_weather`/demo 灯控制），
 > 也是 **client**（在握手后向设备请求 `tools/list` 以了解设备能力）。
 >
-> **跟 openclaw 没关系**：bridge 内的 MCP 工具（`get_time`、`get_weather`、`turn_on/off_light`）是 bridge **自己实现**的，
-> openclaw agent 的 tool registry 是**另一套**，bridge 看不到。LLM 思考时调用工具统一走 openclaw 端。
+> **V2 #7 改变**：bridge **现**在**会**主**动**调**用**设备端**工**具**（**set_volume / set_brightness / get_device_status**）**。
+>  协议**本**身**没**变**（**依**然**是** JSON-RPC 2.0 over xiaozhi WS `type=mcp` 消息**）**；
+>  变**化**的**是** bridge 把 esp32 端**工**具**注**册**到** MCP registry，**当** LLM 决**定**调**用**某**个**工**具**时，bridge 通过 `tools/call` **发** JSON-RPC 给** esp32 执**行**并 await 响**应**。
+>
+> **跟 openclaw 的关系**（V2 #7）：
+> - bridge **现**在**会**传** `tools[]` 给 openclaw（包**括** esp32 端** DeviceToolHandler + bridge 本**地** FunctionTool）
+> - openclaw **把** `tool_calls` SSE delta 原**样**回**传**给 bridge
+> - bridge 拿**到** `tool_call` 事**件**后调 MCP registry：对 esp32 端** DeviceToolHandler 发** JSON-RPC `tools/call`；对 bridge 本**地** FunctionTool 直**接**调**用** Python 函**数**
+> - 响**应**以** `role=tool` message 喂**回** openclaw，LLM 继**续**产**生**最**终**文**本**
+> - V2 #7 **不**改** openclaw 内**部**工**具**（**web_search / IoT 平台**）**。**只**是**让** openclaw 看**到** esp32 端**工**具**并**让** bridge 转**发**调**用**
 >
 > **原来的设计**（仅历史参考）：原 xiaozhi 项目里，后端发 MCP 给设备查“设备有什么 tool”。V1 保留了设备能力发现（声音控制、板载 LED 等），
-> 但**普通 IoT 工具** 是在 bridge 里实现，不走 openclaw 的 tool calling。
+> 但**普通 IoT 工具** 是在 bridge 里实现，不走 openclaw 的 tool calling。**V2 #7** 把"bridge 调设备 tool"**从** V1 的 "log only" 升**级**为** "**真**实** JSON-RPC 透**过** esp32 mcp_server"**。
 
 ### 5.1 方法列表
 
-| 方法 | 方向 | 用途 |
-|---|---|---|
-| `initialize` | backend → device | 初始化 MCP 会话 |
-| `tools/list` | backend → device | 列出设备能力 |
-| `tools/call` | backend → device | 调用设备能力 |
-| `notifications/...` | device → backend | 设备主动通知 |
+| 方法 | 方向 | 用途 | 实现阶**段** |
+|---|---|---|---|
+| `initialize` | backend → device | 初始化 MCP 会话 | V1 |
+| `tools/list` | backend → device | 列出设备能力 | V1 |
+| `tools/call` | backend → device | **bridge 主动调** esp32 端 tool | **V2 #7（重**点**）** |
+| `tools/call` | device → backend | 设备调 bridge 端 tool（V1 占位 log only） | V1 |
+| `notifications/...` | device → backend | 设备主动通知 | V1 |
 
 ### 5.2 `initialize`
 

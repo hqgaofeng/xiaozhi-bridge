@@ -102,7 +102,25 @@ class OpenClawLLM(LLMClient):
             # tool_call_id through to the LLM as part of the message.
             if msg.role == "system":
                 continue
-            api_messages.append({"role": msg.role, "content": msg.content})
+            entry: dict[str, Any] = {"role": msg.role, "content": msg.content}
+            # V2 #7: assistant tool_calls turn MUST carry the
+            # tool_calls array (OpenAI API contract — without it, the
+            # model treats the assistant turn as pure text and ignores
+            # the subsequent tool result). V1 sent only role+content
+            # which dropped the tool calls entirely.
+            if msg.role == "assistant" and msg.tool_calls:
+                entry["tool_calls"] = msg.tool_calls
+            # V2 #7: tool result turn MUST carry tool_call_id
+            # (the id of the assistant tool_call it's answering).
+            # Without it, the LLM can't associate the result with a
+            # specific call when there are multiple parallel tool calls.
+            if msg.role == "tool" and msg.tool_call_id:
+                entry["tool_call_id"] = msg.tool_call_id
+            # V2 #7: tool result turn may also carry a function name
+            # (some Anthropic-compatible backends require it).
+            if msg.role == "tool" and msg.name:
+                entry["name"] = msg.name
+            api_messages.append(entry)
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -222,11 +240,20 @@ class OpenClawLLM(LLMClient):
                                 "arguments": "",
                             })
                             if tc_delta.get("id"):
-                                slot["id"] += tc_delta["id"]
+                                # `id` is a single value, not a stream
+                                # delta (OpenAI sends it on the first
+                                # chunk and never again for the same call).
+                                slot["id"] = tc_delta["id"]
                             fn = tc_delta.get("function") or {}
                             if fn.get("name"):
+                                # name IS streamed incrementally as
+                                # partial tokens (e.g. "self.audio_" then
+                                # "speaker.set_volume"), so concatenate.
                                 slot["name"] += fn["name"]
                             if fn.get("arguments"):
+                                # arguments stream as a JSON string
+                                # fragment by fragment, so concatenate
+                                # and parse at the end.
                                 slot["arguments"] += fn["arguments"]
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]

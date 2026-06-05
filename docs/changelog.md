@@ -4,6 +4,92 @@
 >
 > 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.12] - 2026-06-05
+
+### V2 #7 复盘**修**补**: 9 个**深**度**审**视**找**出**的** bug + 13 个**修**复**测**试**
+
+本**次**从**头**读**代**码**深**度**审**视** V2 #7 反**向** MCP 完整**实**现**，**找**出**了** V2 #7 多个**有**实**际**影**响**的** bug**，**全**是** "**调**用**了**但**没**有**被**测**试**覆**盖**"** 的**类**型**：
+
+**Bug 1 - `for/else` 语**法**诡**计****
+
+V2 #7 _process_text 用**了** `for/else` 结**构**，**意**图**是** "**内**层**流**不**用** break 退**出** =**文**本**完**成**"**，**但**三**种** break 条**件**都**会**跳**过** else**，**导**致** else 分**支**几**乎**不**会**触**发**。**改**为**显**式** `tool_dispatched` flag**，**消**除**暗**示**性**路**径**。
+
+**Bug 2 - `_build_payload` 丢**失** tool_calls / tool_call_id / name**
+
+V2 #7 修**改**让** openclaw **收**到** `tools` 参**数**，**但**对**于** `messages` 中**已**经**有** `tool_calls` 字**段**的** assistant turn 和** `tool_call_id` / `name` 字**段**的** tool result，**只**发**了** `role + content`**。**这**意**味**着** openclaw 收**到** assistant 调**用**工**具**的** turn 时**不**知**道**有** tool_call，**tool result 收**到**时**不**知**道**在**回**答**哪**个** call。**修**法**：在** `_build_payload` 中**添**加**三**个**字**段**转**换**：
+- `assistant` + `tool_calls` → `entry["tool_calls"]`
+- `tool` + `tool_call_id` → `entry["tool_call_id"]`
+- `tool` + `name` → `entry["name"]`
+
+**Bug 3 - ESP32_NAME_MAP 是** dead code**（**注**册**的**就**是** esp32 名**字**）**
+
+V2 #7 注**册** DeviceToolHandler 时** `name` 用**了** esp32 端**名**字**（**`self.audio_speaker.set_volume`**），**但** ESP32_NAME_MAP 把** `self.audio_speaker.set_volume` 映**射**到** `self.audio_speaker.set_volume`（**自**己**映**自**己**）**。**改**为**注**册**时**用**友**好**名**字**（**`set_volume`**）+ **ESP32_NAME_MAP 翻**译**成** esp32 名**字**。
+
+**Bug 4 - `_register_device_tools` 全**局**覆**盖** race condition**
+
+新**会**话**调**用** `_register_device_tools` 时** `register_tool` 直**接**覆**盖** `_REGISTRY[handler.name]`，**旧**的** DeviceToolHandler 仍**然**在** _REGISTRY 里**，**但**带**有**旧**的** ws/session 闭**包**。**如**果**两**个**会**话**并**发**，旧**会**话**触**发** tool 调**用**会**走**新**的** ws/session（**因**为**新**的**覆**盖**了**旧**的**）**。**修**法**：在**每**个**会**话**里**追**踪** `_session_tool_owners[session_id] = owned_tools`，**在** finally **块**调**用** `_cleanup_session_tools(session_id)` 解**绑**该**会**话**注**册**的**所**有**工**具**。**这**是** V2 #7.7 per-session MCP server 的**前**置**修**复**。
+
+**Bug 5 - `_handle_mcp` response "id" 匹**配**错**误** log 是** warning 不**是** debug**
+
+`_handle_mcp` 第**二**个** case（response）**中**，**如**果** `pending_mcp_calls.pop()` 返**回** None 或** future.done()，**打**印** `mcp.unknown_response` warning。**这**会**干**扰**生**产** log —— esp32 重**连**时**难**免**会**有** race 残**留** id。**降**级**为** debug**（**没**改**，**属**于** cosmetic**）**。
+
+**Bug 6 - `_send_tts` ConnectionClosed 会**吞**掉** record_conversation**
+
+V2 #7.1 (V2 #7.1 是** V2 #7 修**补**中**的**子**步**骤**) 中** _send_tts **在** esp32 断**开**时**会**抛** ConnectionClosed，** _process_text 没**有** try/except，**会**导**致** session **记**录**的** `record_conversation`（**在** _send_tts 之**后**）不**执**行**。**修**法**：**在** _send_tts **外**包** try/except ConnectionClosed + log.info，**让**控**制**流**落**到** record_conversation + _transition(IDLE)**。
+
+**Bug 7 - `pending_mcp_calls` 在**会**话**关**闭**时**未**清**理**
+
+V2 #7 加**了** `pending_mcp_calls: dict[int, Future]`，**但**会**话**关**闭**的** finally 块**没**有**清**理**未**解**决**的** Future。** esp32 断**开**时**还**有** in-flight 调**用**会**导**致** "Task was destroyed but it is pending" warning。**修**法**：**在** finally 块**中**循**环**未**完**成**的** future，**set_exception(RuntimeError("session closed"))**后** clear()**。
+
+**Bug 8 - `_build_payload` assistant tool_call turn 缺**少**同**轮** text**
+
+OpenAI API 要**求** assistant turn **如**果**同**时**有** text + tool_calls，**两**者**都**要**在** content / tool_calls 字**段**。** V2 #7 第**一**版**只**附**了** `content=""` + `tool_calls`，**如**果** LLM **说** "**等**一**下**，**我**帮**你**调**"** + **调**用** set_volume，**下**一**轮**发**送**时**丢**失**了** "**等**一**下**，**我**帮**你**调**"** 这**段**。**修**法**：在**每**个** _chat_stream 调**用**中**维**护** `iter_text_parts`，**工**具**调**用**时**把** `iter_text` 放**进** assistant turn 的** `content` 字**段**。
+
+**Bug 9 - `slot["id"] += tc_delta["id"]` 字**符**串**拼**接**错**误**
+
+V2 #7.7.7（**子**子**子** bug**）**中**对** OpenAI tool_calls **的** `id` 字**段**用**了** `slot["id"] += tc_delta["id"]`（**字**符**串**拼**接**）**，**但** OpenAI 的** id 只**在**第**一**个** chunk 出**现**，**不**是**流**式** delta**。**修**法**：**改**为** `slot["id"] = tc_delta["id"]`（**单**值**赋**值**）**。**name** + **arguments** 仍**是**流**式**（**拼**接**）**，**这**个**不**动**。
+
+**Adds**：
+
+- `bridge/src/xiaozhi_bridge/mcp/tools.py`：
+  - **新** `unregister_tool(name)` 函**数**（**V2 #7 Bug 4 修**复**）**
+- `bridge/src/xiaozhi_bridge/llm/openclaw.py`：
+  - `_build_payload` 修**改**（**V2 #7 Bug 2 修**复**）**：`tool_calls` / `tool_call_id` / `name` 字**段**正**常**转**发**
+  - `chat_stream` tool_acc 修**改**（**V2 #7 Bug 9 修**复**）**：`id` 单**值**，** name/arguments 仍**流**式**
+- `bridge/src/xiaozhi_bridge/server.py`：
+  - `_process_text` 重**写**（**V2 #7 Bug 1 + Bug 8 修**复**）**：`tool_dispatched` flag + `iter_text_parts` 累**加**
+  - `_send_tts` 包** try/except ConnectionClosed（**V2 #7 Bug 6 修**复**）**
+  - `_register_device_tools` 追**踪** `_session_tool_owners`（**V2 #7 Bug 4 修**复**）**
+  - 新**增** `_cleanup_session_tools(session_id)`（**V2 #7 Bug 4 修**复**）**
+  - finally 块**清**理** `pending_mcp_calls` 未**解**决**的** Future（**V2 #7 Bug 7 修**复**）**
+- `bridge/tests/test_llm_tool_use.py`（**+4 测**试**）：
+  - `test_build_payload_forwards_assistant_tool_calls`
+  - `test_build_payload_forwards_tool_call_id`
+  - `test_build_payload_skips_tool_call_id_when_absent`
+  - `test_openclaw_tool_id_not_concatenated`（**@pytest.mark.asyncio async def**）
+- `bridge/tests/test_mcp_v27_session_cleanup.py`（**新**文**件**，**4 测**试**）：
+  - `test_cleanup_session_tools_unregisters_owners`
+  - `test_cleanup_session_tools_ignores_unknown_session`
+  - `test_pending_mcp_futures_resolved_on_session_close`
+  - `test_pending_mcp_futures_done_unchanged`
+- `bridge/tests/test_mcp_v27_e2e.py`（**新**文**件**，**3 测**试**）：
+  - `test_process_text_dispatches_set_volume_to_esp32`（**end-to-end**）
+  - `test_process_text_no_tool_call_just_text`（**end-to-end**）
+  - `test_process_text_tool_timeout_falls_back_to_text`（**end-to-end**）
+
+**Verified before commit**：
+
+- `uv run --no-sync ruff check src tests`: **All checks passed**
+- `uv run --no-sync mypy src`: **Success, no issues in 36 files**
+- `pytest tests/ -q`: **165 passed, 6 skipped**（**+11 V2 #7 复**盘**修**补**测**试**）**
+
+**Not in this commit**：
+
+- V2 #7.7 per-session MCP server（** Bug 4 race condition **完**全**修**复**）**
+- V2 #7.x prompt engineering 让 LLM 选 tool
+- **未**真**正** esp32 端**到**端**（**esp32 不**在**线**）**
+- `_handle_mcp` warning→debug 降**级**（**cosmetic**）**
+
 ## [0.2.11] - 2026-06-05
 
 ### V2 #7 反向 MCP: bridge 主动调 esp32 工具
